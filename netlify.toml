@@ -1,6 +1,8 @@
 [build]
   command = "npm run build"
   publish = ".next"
+  # 纯文档/资源类提交（pptx/docx/md/html 等）跳过构建，代码改动才部署
+  ignore = "bash ./scripts/check-build.sh"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
