@@ -54,7 +54,7 @@ export const MONAD_RPC_WS_LIST = parseRpcList(
 export const MONAD_RPC_HTTP = MONAD_RPC_HTTP_LIST[0];
 export const MONAD_RPC_WS = MONAD_RPC_WS_LIST[0];
 
-const EXPLORER_BASE = MONAD_IS_TESTNET ? "https://testnet.monadscan.com" : "https://monadscan.com";
+const EXPLORER_BASE = MONAD_IS_TESTNET ? "https://testnet.monadexplorer.com" : "https://monadscan.com";
 
 /** Hex chainId string for wallet_addEthereumChain / wallet_switchEthereumChain. */
 export const MONAD_CHAIN_ID_HEX = `0x${MONAD_CHAIN_ID.toString(16)}`;
@@ -80,7 +80,7 @@ export const monad = defineChain({
     default: { http: MONAD_RPC_HTTP_LIST, webSocket: MONAD_RPC_WS_LIST },
   },
   blockExplorers: {
-    default: { name: MONAD_IS_TESTNET ? "MonadScan (Testnet)" : "MonadScan", url: EXPLORER_BASE },
+    default: { name: MONAD_IS_TESTNET ? "MonadExplorer (Testnet)" : "MonadScan", url: EXPLORER_BASE },
   },
   contracts: {
     multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" },
