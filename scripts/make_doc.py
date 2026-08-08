@@ -12,7 +12,7 @@ SECTIONS = [
     {
         "heading": "一、项目定位",
         "body": [
-            "MonadLens 是面向 Monad 生态的对话式链上助手 + 签名前后果透镜。",
+            "MonadLens（中文名「透视链」）是面向 Monad 生态的对话式链上助手 + 签名前后果透镜。",
             (
                 "用户用中文描述想做的事，AI Agent 负责构造交易；"
                 "但在用户签名之前，系统通过 Moss SDK 在真实链上状态中"
@@ -108,13 +108,12 @@ SECTIONS = [
             ("网络切换", True),
             "修改 .env.local 中 NEXT_PUBLIC_MONAD_NETWORK=testnet|mainnet 后重新 npm run build 即可切换。默认 main网。",
             None,
-            ("许可证", True), "MIT License",
         ],
     },
 ]
 
 SHORT_DESC = (
-    "MonadLens 是面向 Monad 生态的对话式链上安全助手。"
+    "MonadLens（中文名「透视链」）是面向 Monad 生态的对话式链上安全助手。"
     "用户用中文描述交易意图，AI Agent 构造交易；但在签名前，"
     "系统通过 Moss SDK 在真实链上状态模拟执行，把资金流向、"
     "授权对象、收款方身份用人话展开，并对五类常见攻击（收款方掉包、"
@@ -129,7 +128,7 @@ SHORT_DESC = (
 def gen_html() -> str:
     lines = [
         "<!DOCTYPE html><html lang=zh-CN><head><meta charset=UTF-8>",
-        "<title>MonadLens 项目文档</title>",
+        "<title>MonadLens · 透视链 项目文档</title>",
         "<style>",
         "body{font-family:'Microsoft YaHei','PingFang SC',sans-serif;max-width:780px;margin:36px auto;padding:0 20px;color:#1a1a1a;line-height:1.85;font-size:15px;}",
         "h2{color:#6B21A8;border-bottom:2px solid #6B21A8;padding-bottom:6px;margin-top:34px;font-size:19px;}",
@@ -182,7 +181,7 @@ def gen_docx() -> Document:
     # title
     t = doc.add_paragraph()
     t.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _rf(t.add_run("MonadLens \u2014 \u9879\u76ee\u6587\u6863"), size=22, bold=True, color=(107, 33, 168))
+    _rf(t.add_run("MonadLens \u00b7 \u900f\u89c6\u94fe \u2014 \u9879\u76ee\u6587\u6863"), size=22, bold=True, color=(107, 33, 168))
 
     sub = doc.add_paragraph()
     sub.alignment = WD_ALIGN_PARAGRAPH.CENTER

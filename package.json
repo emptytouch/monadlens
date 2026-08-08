@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@netlify/plugin-nextjs": "^5.0.0",
     "@tanstack/react-query": "^5.101.4",
     "@themoss/core": "^0.1.0",
     "@themoss/simulator": "^0.1.0",

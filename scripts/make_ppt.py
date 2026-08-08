@@ -130,7 +130,7 @@ def page_cover():
          [{"text": "MonadLens", "size": 66, "color": WHITE, "bold": True,
            "align": PP_ALIGN.CENTER}])
     text(s, Inches(0.9), Inches(3.35), Inches(11.5), Inches(0.7),
-         [{"text": "看清网络，看清后果", "size": 30, "color": PURPLE, "bold": True,
+         [{"text": "透视链 · 看清网络，看清后果", "size": 30, "color": PURPLE, "bold": True,
            "align": PP_ALIGN.CENTER}])
     text(s, Inches(0.9), Inches(4.35), Inches(11.5), Inches(0.8),
          [{"text": "在签名之前，先看清一笔交易到底会做什么", "size": 18,
