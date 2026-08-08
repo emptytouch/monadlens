@@ -44,11 +44,11 @@ next-env.d.ts
 # screenshots / verification shots (not source)
 .shots/
 
-# docs / pptx artifacts (regenerated via scripts/, not committed)
+# docs artifacts (regenerated via scripts/)
+# PPT is committed to repo; docx/md/html are local only
 项目报名文档.md
 项目报名文档.html
 项目报名文档.docx
-MonadLens演示.pptx
 
 # Office temp lock files
 ~$*
