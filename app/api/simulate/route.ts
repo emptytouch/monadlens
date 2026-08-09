@@ -65,23 +65,60 @@ function decideVerdict(reverted: boolean, warnings: { code: string }[]): Verdict
 }
 
 /**
- * Runs the Moss trace simulator, falling back through the configured RPC list
- * until one exposes debug_traceCall. A reverted plan is a *successful* trace
- * (verdict=blocked), not an error — only RPC / method-unavailable failures throw.
+ * Runs the Moss trace simulator across all configured RPCs in *parallel* and
+ * returns whichever responds first — instead of the old serial fallback that
+ * could block ~20s on a single slow/unsupported endpoint before moving on.
+ *
+ * A reverted plan is a *successful* trace (verdict=blocked), not an error —
+ * only RPC / method-unavailable failures count as failures here.
+ *
+ * An overall timeout (25 s) guards against the case where every endpoint is
+ * slow: we fail fast with a clear message rather than hanging the request.
  */
-async function runSimulate(plan: BuiltPlan["plan"]) {
-  let lastErr: unknown;
-  for (const { rpcUrl, simulator } of simulators) {
-    try {
-      return await simulator.simulate([plan]);
-    } catch (err) {
-      lastErr = err;
-      // Try the next endpoint. SimulatorUnavailableError (no debug_traceCall)
-      // and transient HTTP errors both warrant a retry on the next RPC.
-      continue;
-    }
+type Simulator = ReturnType<typeof createTraceSimulator>;
+type SimOutcome = Awaited<ReturnType<Simulator["simulate"]>>;
+
+async function runSimulate(plan: BuiltPlan["plan"]): Promise<SimOutcome> {
+  if (simulators.length === 0) {
+    throw new SimulatorUnavailableError("未配置任何 RPC 端点");
   }
-  throw lastErr;
+
+  const attempts = simulators.map(({ rpcUrl, simulator }) =>
+    simulator.simulate([plan]).then(
+      (value) => ({ ok: true as const, value, rpcUrl }),
+      (error) => ({ ok: false as const, error, rpcUrl }),
+    ),
+  );
+
+  const OVERALL_TIMEOUT_MS = 25_000;
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(
+      () => reject(new Error("模拟超时：所有 RPC 端点均无响应，请稍后重试或检查网络")),
+      OVERALL_TIMEOUT_MS,
+    ),
+  );
+
+  // Race the parallel attempts against the overall timeout. Each attempt is
+  // already resolved (never rejects) thanks to the .then() wrapper above, so
+  // the only way Promise.race settles with a rejection is the timeout.
+  const settled = await Promise.race([
+    Promise.all(attempts),
+    timeout.catch((e) => e as Error),
+  ]).catch((e) => e as Error);
+
+  if (settled instanceof Error) {
+    // Timed out — throw directly so the caller shows a clear timeout message.
+    throw settled;
+  }
+
+  const results = settled as { ok: boolean; value?: unknown; error?: unknown; rpcUrl: string }[];
+  const winner = results.find((r) => r.ok);
+  if (winner?.ok) {
+    return winner.value as SimOutcome;
+  }
+
+  // All endpoints failed — surface the first error for a useful message.
+  throw results[0]?.error ?? new Error("所有 RPC 端点模拟失败");
 }
 
 export async function POST(request: Request) {

@@ -177,11 +177,16 @@ export function AgentChat({ onSimulate }: { onSimulate: (sim: SimResponse) => vo
     append({ role: "user", text: message });
     setInput("");
     setBusy(true);
+    // Independent 35 s timeout for the LLM/agent round-trip so a slow or
+    // crashed backend can't leave the UI spinning forever.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 35_000);
     try {
       const res = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message, account: address }),
+        signal: ctrl.signal,
       });
       if (!res.ok) {
         const errData = (await res.json().catch(() => ({}))) as { error?: string };
@@ -194,8 +199,13 @@ export function AgentChat({ onSimulate }: { onSimulate: (sim: SimResponse) => vo
         await runAction(reply);
       }
     } catch (e) {
-      append({ role: "agent", text: `网络错误：${e instanceof Error ? e.message : "无法连接"}` });
+      if (e instanceof Error && e.name === "AbortError") {
+        append({ role: "agent", text: "请求超时，Agent 响应过慢，请稍后重试。" });
+      } else {
+        append({ role: "agent", text: `网络错误：${e instanceof Error ? e.message : "无法连接"}` });
+      }
     } finally {
+      clearTimeout(timer);
       setBusy(false);
     }
   }

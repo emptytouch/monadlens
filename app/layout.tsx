@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Providers } from "./providers";
+import { AppErrorBoundary } from "@/components/AppErrorBoundary";
 
 export const metadata: Metadata = {
   title: "MonadLens · 透视链 — 看清网络，看清后果",
@@ -12,7 +13,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="zh-CN">
       <body className="min-h-screen antialiased">
-        <Providers>{children}</Providers>
+        <AppErrorBoundary>
+          <Providers>{children}</Providers>
+        </AppErrorBoundary>
       </body>
     </html>
   );
