@@ -17,6 +17,7 @@ export default function Home() {
         <div className="flex items-baseline gap-3">
           <span className="text-base font-semibold tracking-tight text-mist-100">
             Monad<span className="text-violet-soft">Lens</span>
+            <span className="ml-2 text-xs font-normal text-mist-400">· 透视链</span>
           </span>
           <span className="hidden text-[11px] text-mist-400 sm:inline">
             看清网络，看清后果，然后才签字
