@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAccount, useBalance, useConnect, useDisconnect } from "wagmi";
 import { injected } from "wagmi/connectors";
 import { shortAddr, formatAmount } from "@/lib/format";
@@ -17,6 +17,17 @@ export function WalletBar() {
   const [feedback, setFeedback] = useState<NetFeedback | null>(null);
 
   const onNetwork = chainId === MONAD_CHAIN_ID;
+
+  // Auto-clear feedback after 3 s so the UI doesn't stay stuck on "已切到…"
+  const fbTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (feedback) {
+      fbTimer.current = setTimeout(() => setFeedback(null), 3000);
+    }
+    return () => {
+      if (fbTimer.current) clearTimeout(fbTimer.current);
+    };
+  }, [feedback]);
 
   /**
    * Ensure the wallet is on (or has added) the Monad network.
@@ -129,7 +140,7 @@ export function WalletBar() {
           </span>
         )}
       </div>
-      {!onNetwork && (
+      {!onNetwork && !feedback?.ok && (
         <button
           onClick={ensureNetwork}
           title="把 Monad 网络添加到钱包并切换过去"
