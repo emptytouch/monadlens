@@ -16,7 +16,32 @@ export function WalletBar() {
 
   const [feedback, setFeedback] = useState<NetFeedback | null>(null);
 
-  const onNetwork = chainId === MONAD_CHAIN_ID;
+  const rawOnNetwork = chainId === MONAD_CHAIN_ID;
+
+  // Debounce onNetwork: when chainId briefly flickers during RPC reconnection,
+  // keep the "switch" button hidden for 2 s to avoid UI flash.
+  const [stableOnNetwork, setStableOnNetwork] = useState(rawOnNetwork);
+  const offTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (rawOnNetwork) {
+      // Immediately confirm when chain matches
+      if (offTimer.current) clearTimeout(offTimer.current);
+      setStableOnNetwork(true);
+    } else {
+      // Delay showing "wrong network" by 2 s — hides transient flickers
+      if (!offTimer.current) {
+        offTimer.current = setTimeout(() => {
+          setStableOnNetwork(false);
+          offTimer.current = null;
+        }, 2000);
+      }
+    }
+    return () => {
+      if (offTimer.current) clearTimeout(offTimer.current);
+    };
+  }, [rawOnNetwork]);
+
+  const onNetwork = stableOnNetwork;
 
   // Auto-clear feedback after 3 s so the UI doesn't stay stuck on "已切到…"
   const fbTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
