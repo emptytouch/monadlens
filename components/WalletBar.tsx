@@ -16,19 +16,26 @@ export function WalletBar() {
 
   const [feedback, setFeedback] = useState<NetFeedback | null>(null);
 
+  // --- Network detection with "trust after switch" strategy ---
+  //
+  // Problem: wagmi's chainId is unreliable when RPC endpoints flake (fetch failed,
+  // WS reconnecting, extension blocking requests). The wallet may actually be on
+  // the correct chain but wagmi reports a stale/undefined chainId → the "switch"
+  // button keeps reappearing.
+  //
+  // Solution: when the user explicitly switches successfully, we TRUST that action
+  // for 15 s regardless of what wagmi reports. This covers the RPC instability
+  // window. After 15 s we fall back to wagmi's chainId (with 2-s debounce).
   const rawOnNetwork = chainId === MONAD_CHAIN_ID;
+  const [trustedUntil, setTrustedUntil] = useState(0); // timestamp ms
 
-  // Debounce onNetwork: when chainId briefly flickers during RPC reconnection,
-  // keep the "switch" button hidden for 2 s to avoid UI flash.
   const [stableOnNetwork, setStableOnNetwork] = useState(rawOnNetwork);
   const offTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (rawOnNetwork) {
-      // Immediately confirm when chain matches
       if (offTimer.current) clearTimeout(offTimer.current);
       setStableOnNetwork(true);
     } else {
-      // Delay showing "wrong network" by 2 s — hides transient flickers
       if (!offTimer.current) {
         offTimer.current = setTimeout(() => {
           setStableOnNetwork(false);
@@ -41,7 +48,9 @@ export function WalletBar() {
     };
   }, [rawOnNetwork]);
 
-  const onNetwork = stableOnNetwork;
+  // Trust window: if we recently switched successfully, force onNetwork=true
+  const isWithinTrustWindow = Date.now() < trustedUntil;
+  const onNetwork = stableOnNetwork || isWithinTrustWindow;
 
   // Auto-clear feedback after 3 s so the UI doesn't stay stuck on "已切到…"
   const fbTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -73,6 +82,7 @@ export function WalletBar() {
         params: [{ chainId: MONAD_CHAIN_ID_HEX }],
       });
       setFeedback({ ok: true, msg: `已切到 ${MONAD_NETWORK_LABEL}` });
+      setTrustedUntil(Date.now() + 15_000); // trust for 15 s — covers RPC instability
     } catch (e) {
       const code = (e as { code?: number })?.code;
       if (code === 4902) {
@@ -82,6 +92,7 @@ export function WalletBar() {
             params: [MONAD_ADD_CHAIN_PARAMS],
           });
           setFeedback({ ok: true, msg: `已添加并切到 ${MONAD_NETWORK_LABEL}` });
+          setTrustedUntil(Date.now() + 15_000);
         } catch (e2) {
           const c2 = (e2 as { code?: number })?.code;
           setFeedback({
