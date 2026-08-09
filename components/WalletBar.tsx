@@ -120,8 +120,8 @@ export function WalletBar() {
         <span className="tabular text-xs text-mist-200">
           {balance ? `${formatAmount(balance.value, balance.decimals, 4)} MON` : "—"}
         </span>
-        <span className={`text-[10px] ${onNetwork ? "text-emerald-400" : "text-rose-400"}`}>
-          {onNetwork ? MONAD_NETWORK_LABEL : `链不对，需切到 ${MONAD_NETWORK_LABEL}`}
+        <span className={`text-[10px] ${onNetwork ? "text-emerald-400" : "text-mist-500"}`}>
+          {onNetwork ? MONAD_NETWORK_LABEL : "网络不匹配"}
         </span>
         {feedback && (
           <span className={`text-[10px] ${feedback.ok ? "text-emerald-400" : "text-amber-400"}`}>
