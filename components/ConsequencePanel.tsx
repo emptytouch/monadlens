@@ -69,6 +69,7 @@ function SimulationContent({
   isConnected,
   chainId,
   onSend,
+  onReset,
   sendDisabled,
   sending,
   switching,
@@ -81,6 +82,7 @@ function SimulationContent({
   isConnected: boolean;
   chainId: number | undefined;
   onSend: () => Promise<void>;
+  onReset: () => void;
   sendDisabled: boolean;
   sending: boolean;
   switching: boolean;
@@ -373,20 +375,28 @@ function SimulationContent({
         )}
 
         {sent.length > 0 && (
-          <div className="space-y-1">
-            {sent.map((h) => (
-              <a
-                key={h}
-                href={explorerTx(h)}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center justify-between rounded-lg border border-emerald-400/30 bg-emerald-400/5 px-3 py-1.5 text-[11px] text-emerald-300 hover:border-emerald-400/60"
-              >
-                <span className="font-mono">{shortAddr(h, 6)}</span>
-                <span>在 MonadScan 查看 \u2197</span>
-              </a>
-            ))}
-          </div>
+          <>
+            <div className="space-y-1">
+              {sent.map((h) => (
+                <a
+                  key={h}
+                  href={explorerTx(h)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center justify-between rounded-lg border border-emerald-400/30 bg-emerald-400/5 px-3 py-1.5 text-[11px] text-emerald-300 hover:border-emerald-400/60"
+                >
+                  <span className="font-mono">{shortAddr(h, 6)}</span>
+                  <span>在 {MONAD_IS_TESTNET ? "MonadExplorer" : "MonadScan"} 查看 \u2197</span>
+                </a>
+              ))}
+            </div>
+            <button
+              onClick={onReset}
+              className="w-full rounded-lg border border-ink-700 bg-ink-850 px-4 py-1.5 text-[11px] text-mist-400 transition-colors hover:border-violet-deep hover:text-violet-soft"
+            >
+              重新演示
+            </button>
+          </>
         )}
       </section>
     </div>
@@ -467,15 +477,20 @@ export function ConsequencePanel({ sim }: { sim: SimResponse | null }) {
     return firstLine.length > 120 ? firstLine.slice(0, 117) + "\u2026" : firstLine;
   }
 
+  function resetSend() {
+    setSent([]);
+    setSendError(null);
+  }
+
   async function handleSend() {
     if (!sim || !sim.ok || blocked || !sim.plan?.txs?.length) return;
     setSendError(null);
     setSending(true);
+    const hashes: string[] = [];
     try {
       if (chainId !== MONAD_CHAIN_ID) {
         await switchChainAsync({ chainId: MONAD_CHAIN_ID });
       }
-      const hashes: string[] = [];
       for (const tx of sim.plan.txs) {
         const h = await sendTransactionAsync({
           to: tx.to as `0x${string}`,
@@ -483,9 +498,10 @@ export function ConsequencePanel({ sim }: { sim: SimResponse | null }) {
           value: tx.value ? BigInt(tx.value) : 0n,
         });
         hashes.push(h);
+        setSent([...hashes]); // 每笔成功即展示，避免部分失败丢失已广播哈希
       }
-      setSent(hashes);
     } catch (e) {
+      if (hashes.length > 0) setSent([...hashes]); // 部分成功也保留已广播交易
       setSendError(translateSendError(e));
     } finally {
       setSending(false);
@@ -501,6 +517,7 @@ export function ConsequencePanel({ sim }: { sim: SimResponse | null }) {
       isConnected={isConnected}
       chainId={chainId}
       onSend={handleSend}
+      onReset={resetSend}
       sendDisabled={sendDisabled}
       sending={sending}
       switching={switching}

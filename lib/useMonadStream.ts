@@ -59,6 +59,7 @@ export function useMonadStream() {
     let lastWsAt = 0;
     let highest = 0n;
 
+    let lastBlockAt = 0;
     /** Ignore blocks we've already rendered, whichever transport wins. */
     const accept = (block: FullBlock, from: "ws" | "http") => {
       if (disposed) return;
@@ -66,11 +67,23 @@ export function useMonadStream() {
       if (n <= highest) return;
       highest = n;
       if (from === "ws") lastWsAt = Date.now();
+      lastBlockAt = Date.now();
       setStatus("live");
       setSource(from);
       pushBlock(toBlockInfo(block));
       pushTxs(toTxInfos(block));
     };
+
+    // Watchdog: if the stream goes silent (socket dropped AND polling also
+    // failing) while we already had data, downgrade from "live" so the UI stops
+    // showing stale numbers as if they were current.
+    const watchdog = setInterval(() => {
+      if (disposed) return;
+      const st = useChainStore.getState();
+      if (st.status === "live" && lastBlockAt && Date.now() - lastBlockAt > 15000) {
+        setStatus("connecting");
+      }
+    }, 5000);
 
     setStatus("connecting");
 
@@ -136,6 +149,7 @@ export function useMonadStream() {
     return () => {
       disposed = true;
       if (pollTimer) clearTimeout(pollTimer);
+      clearInterval(watchdog);
       unwatch?.();
     };
   }, []);

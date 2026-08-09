@@ -183,6 +183,11 @@ export function AgentChat({ onSimulate }: { onSimulate: (sim: SimResponse) => vo
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message, account: address }),
       });
+      if (!res.ok) {
+        const errData = (await res.json().catch(() => ({}))) as { error?: string };
+        append({ role: "agent", text: `服务异常：${errData.error ?? `HTTP ${res.status}`}` });
+        return;
+      }
       const reply: AgentReply = await res.json();
       append({ role: "agent", text: reply.reply, engine: reply.engine, degraded: reply.degradedReason });
       if (reply.action.type !== "none") {

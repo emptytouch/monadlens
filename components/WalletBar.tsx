@@ -61,23 +61,55 @@ export function WalletBar() {
     }
   }
 
+  /** Connect with a friendly error path: detect a missing wallet extension
+   *  before calling connect, and translate a user rejection (4001). */
+  async function handleConnect() {
+    const eth = (window as unknown as { ethereum?: unknown }).ethereum;
+    if (!eth) {
+      setFeedback({ ok: false, msg: "未检测到钱包扩展，请先安装 MetaMask / OKX 等" });
+      return;
+    }
+    connect(
+      { connector: injected() },
+      {
+        onError: (e: unknown) => {
+          const code = (e as { code?: number })?.code;
+          setFeedback({
+            ok: false,
+            msg:
+              code === 4001
+                ? "你取消了钱包连接"
+                : ((e as { message?: string })?.message ?? "连接失败，请重试"),
+          });
+        },
+      },
+    );
+  }
+
   if (!isConnected || !address) {
     return (
-      <div className="flex items-center gap-2">
-        <button
-          onClick={ensureNetwork}
-          title="把 Monad 网络一键添加到你的钱包（MetaMask / OKX 等）"
-          className="rounded-full border border-ink-700 bg-ink-850 px-3 py-1.5 text-xs text-mist-400 transition-colors hover:border-violet-brand/50 hover:text-violet-soft"
-        >
-          添加网络
-        </button>
-        <button
-          onClick={() => connect({ connector: injected() })}
-          disabled={connecting}
-          className="rounded-full border border-violet-deep bg-violet-brand/15 px-4 py-1.5 text-xs font-medium text-violet-soft transition-colors hover:bg-violet-brand/25 disabled:opacity-50"
-        >
-          {connecting ? "连接中…" : "连接钱包"}
-        </button>
+      <div className="flex flex-col items-end gap-1">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={ensureNetwork}
+            title="把 Monad 网络一键添加到你的钱包（MetaMask / OKX 等）"
+            className="rounded-full border border-ink-700 bg-ink-850 px-3 py-1.5 text-xs text-mist-400 transition-colors hover:border-violet-brand/50 hover:text-violet-soft"
+          >
+            添加网络
+          </button>
+          <button
+            onClick={handleConnect}
+            disabled={connecting}
+            className="rounded-full border border-violet-deep bg-violet-brand/15 px-4 py-1.5 text-xs font-medium text-violet-soft transition-colors hover:bg-violet-brand/25 disabled:opacity-50"
+          >
+            {connecting ? "连接中…" : "连接钱包"}
+          </button>
+        </div>
+        {feedback && (
+          <span className={`text-[10px] ${feedback.ok ? "text-emerald-400" : "text-amber-400"}`}>
+            {feedback.msg}
+          </span>
+        )}
       </div>
     );
   }

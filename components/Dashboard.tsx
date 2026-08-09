@@ -76,14 +76,15 @@ export function Dashboard() {
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
   }, [txs]);
 
-  // Tick a visible counter while we wait, so a slow RPC never looks frozen.
+  // Tick a visible counter while connecting (initial connect OR stream drop),
+  // so a slow / intermittent RPC never looks frozen.
   const [waited, setWaited] = useState(0);
-  const waiting = mounted && blocks.length === 0;
+  const connecting = mounted && status === "connecting";
   useEffect(() => {
-    if (!waiting) return;
+    if (!connecting) return;
     const id = setInterval(() => setWaited((n) => n + 1), 1000);
     return () => clearInterval(id);
-  }, [waiting]);
+  }, [connecting]);
 
   if (!mounted) {
     return <div className="p-4 text-xs text-mist-400">正在连接 {MONAD_NETWORK_LABEL}…</div>;
@@ -109,7 +110,7 @@ export function Dashboard() {
         <StatusDot status={status} source={source} />
       </div>
 
-      {waiting && <ConnectingHint seconds={waited} />}
+      {status === "connecting" && <ConnectingHint seconds={waited} />}
 
       <div className="grid grid-cols-2 gap-2">
         <Stat label="吞吐" value={formatNumber(metrics.tps, 1)} unit="tx/s" />

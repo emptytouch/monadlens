@@ -50,18 +50,36 @@ export type SimResponse =
       halted: { planIndex: number; txIndex: number; reason: string } | null;
     };
 
-export async function requestSimulation(payload: {
-  intent: IntentSpec;
-  account: string;
-  tamper?: TamperMode;
-  tamperAfterSeal?: boolean;
-}): Promise<SimResponse> {
-  const res = await fetch("/api/simulate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  return (await res.json()) as SimResponse;
+export async function requestSimulation(
+  payload: {
+    intent: IntentSpec;
+    account: string;
+    tamper?: TamperMode;
+    tamperAfterSeal?: boolean;
+  },
+  timeoutMs = 30000,
+): Promise<SimResponse> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch("/api/simulate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: ctrl.signal,
+    });
+    return (await res.json()) as SimResponse;
+  } catch (e) {
+    const aborted = e instanceof Error && e.name === "AbortError";
+    // Return a typed failure instead of throwing, so the UI can show a retry
+    // hint rather than leaving the user staring at a spinner forever.
+    return {
+      ok: false,
+      error: aborted ? "模拟请求超时，请重试" : "无法连接模拟服务，请检查网络后重试",
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Plain-language explanation for every Moss warning code. */
