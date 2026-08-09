@@ -170,7 +170,10 @@ export async function POST(request: Request) {
         { status: 503 },
       );
     }
-    const message = err instanceof Error ? err.message : "模拟失败";
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    const raw = err instanceof Error ? err.message : "模拟失败";
+    // Keep Chinese errors as-is; wrap English/technical dumps with a clear
+    // Chinese lead-in so judges never see a bare English stack trace.
+    const error = /[一-龥]/.test(raw) ? raw : `链上模拟失败（${raw}）`;
+    return NextResponse.json({ ok: false, error }, { status: 500 });
   }
 }

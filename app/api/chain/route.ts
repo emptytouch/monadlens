@@ -46,8 +46,11 @@ export async function POST(request: Request) {
     }
     return NextResponse.json({ ok: false, error: "未知的 action" }, { status: 400 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "链上查询失败";
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    const raw = err instanceof Error ? err.message : "链上查询失败";
+    // Keep Chinese errors as-is; wrap English/technical dumps with a clear
+    // Chinese lead-in so judges never see a bare English stack trace.
+    const error = /[一-龥]/.test(raw) ? raw : `链上查询失败（${raw}）`;
+    return NextResponse.json({ ok: false, error }, { status: 500 });
   }
 }
 

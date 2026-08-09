@@ -205,12 +205,13 @@ export function AgentChat({ onSimulate }: { onSimulate: (sim: SimResponse) => vo
       await send(s);
       return;
     }
-    if (!address) {
-      append({ role: "agent", text: "请先在右上角连接钱包，再试这个安全演示。" });
-      return;
-    }
     setBusy(true);
     try {
+      // Attack demos run Moss interception on a placeholder address, so they
+      // don't require a connected wallet — lower the demo barrier.
+      if (!address) {
+        append({ role: "agent", text: "未连接钱包，将使用演示账户地址进行 Moss 模拟（攻击拦截不依赖真实钱包）。" });
+      }
       await runAction({
         reply: "正在构造演示交易并跑 Moss 模拟…",
         engine: "rules",

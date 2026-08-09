@@ -75,7 +75,7 @@ function SimulationContent({
   switching,
   sent,
   sendError,
-  hasGas,
+  gasState,
 }: {
   sim: SimSuccess;
   address: string | undefined;
@@ -88,7 +88,7 @@ function SimulationContent({
   switching: boolean;
   sent: string[];
   sendError: string | null;
-  hasGas: boolean;
+  gasState: "ok" | "low" | "unknown";
 }) {
   const blocked = sim.verdict === "blocked";
   const effects = sim.simulation?.effects ?? {
@@ -333,11 +333,16 @@ function SimulationContent({
 
         {!blocked && (
           <>
-            {!hasGas && (
+            {gasState === "low" && (
               <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-[11px] leading-relaxed text-amber-300">
                 <span className="font-medium">主网 Gas 不足：</span>
                 你的钱包当前 MON 余额不足以支付交易 Gas 费。后果透镜的模拟预览（上方）不需要真实余额，但实际签名广播需要。
                 可选方案：切换到测试网（免费）或往钱包转入少量 MON。
+              </div>
+            )}
+            {gasState === "unknown" && (
+              <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-[11px] leading-relaxed text-amber-300">
+                余额查询失败（可能是 RPC 抖动）。这不影响上方的模拟预览；若要真实签名，请确认网络正常，或切换到测试网演示。
               </div>
             )}
             <p className="text-[10px] leading-relaxed text-mist-400">
@@ -407,7 +412,7 @@ function SimulationContent({
 
 export function ConsequencePanel({ sim }: { sim: SimResponse | null }) {
   const { address, isConnected, chainId } = useAccount();
-  const { data: nativeBalance } = useBalance({ address, query: { enabled: Boolean(address) } });
+  const { data: nativeBalance, isLoading: balanceLoading } = useBalance({ address, query: { enabled: Boolean(address) } });
   const { sendTransactionAsync } = useSendTransaction();
   const { switchChainAsync, isPending: switching } = useSwitchChain();
   const [sent, setSent] = useState<string[]>([]);
@@ -452,11 +457,26 @@ export function ConsequencePanel({ sim }: { sim: SimResponse | null }) {
   }
 
   const blocked = sim.verdict === "blocked";
-  // On mainnet, require at least ~0.001 MON for gas; testnet is free.
-  const hasGas = MONAD_IS_TESTNET || (nativeBalance?.value ?? 0n) >= 1_000_000_000_000n;
-  const sendDisabled = blocked || !isConnected || sending || switching || sent.length > 0 || !hasGas || Boolean(
-    address && sim.plan?.account && sim.plan.account.toLowerCase() !== address.toLowerCase()
-  );
+  // On mainnet, require at least ~0.000001 MON for gas; testnet is free.
+  // Distinguish a *confirmed* low balance from a *failed/unfetched* one so a
+  // transient RPC error can't disable the button with a misleading "no gas" msg.
+  const MIN_GAS_WEI = 1_000_000_000_000n;
+  const gasState: "ok" | "low" | "unknown" =
+    MONAD_IS_TESTNET
+      ? "ok"
+      : nativeBalance !== undefined && (nativeBalance.value ?? 0n) < MIN_GAS_WEI
+        ? "low"
+        : nativeBalance === undefined && !balanceLoading
+          ? "unknown"
+          : "ok";
+  const sendDisabled =
+    blocked ||
+    !isConnected ||
+    sending ||
+    switching ||
+    sent.length > 0 ||
+    gasState === "low" ||
+    Boolean(address && sim.plan?.account && sim.plan.account.toLowerCase() !== address.toLowerCase());
 
   /** Translate raw viem / RPC errors into user-friendly Chinese messages. */
   function translateSendError(raw: unknown): string {
@@ -464,14 +484,23 @@ export function ConsequencePanel({ sim }: { sim: SimResponse | null }) {
     const lower = msg.toLowerCase();
     if (lower.includes("insufficient funds") || lower.includes("exceeds balance"))
       return "余额不足：钱包里的 MON 不够支付这笔交易的 Gas 费。主网交易需要真实 MON，请先充值或切换到测试网演示。";
-    if (lower.includes("internal error") || lower.includes("request arguments chain"))
-      return "签名失败：可能是钱包余额不足（主网需真实 MON 付 Gas），或 MetaMask 拒绝了该交易。请检查余额后重试。";
     if (lower.includes("user rejected") || lower.includes("user denied") || lower.includes("4001"))
       return "你取消了签名操作。";
+    // Contract rejected the tx during estimateGas (revert / bad params).
+    if (lower.includes("estimategas") || lower.includes("execution reverted") || lower.includes("revert"))
+      return "交易被合约拒绝（estimateGas 失败）。这笔交易在模拟中已被标记风险，请检查参数或收款方后再试。";
+    if (lower.includes("wallet") && (lower.includes("locked") || lower.includes("unlock")))
+      return "钱包被锁定，请先在浏览器扩展里解锁钱包后重试。";
+    if (lower.includes("chain") && (lower.includes("not added") || lower.includes("unrecognized") || lower.includes("unknown")))
+      return "当前网络不在钱包中，请先点击「添加网络」把 Monad 加进钱包。";
+    if (lower.includes("timeout") || lower.includes("timed out") || lower.includes("network") || lower.includes("failed to fetch"))
+      return "网络超时或 RPC 无响应，请稍后重试。";
     if (lower.includes("nonce") || lower.includes("replacement"))
       return "交易 nonce 冲突：请稍等几秒后重试。";
     if (lower.includes("gas") && (lower.includes("underpriced") || lower.includes("too low")))
       return "Gas 价格过低，网络拒绝接收。请稍后重试。";
+    if (lower.includes("internal error") || lower.includes("request arguments chain"))
+      return "签名失败：可能是钱包余额不足（主网需真实 MON 付 Gas），或 MetaMask 拒绝了该交易。请检查余额后重试。";
     // Fallback: show first line only, truncate long technical dumps.
     const firstLine = msg.split("\n")[0].trim();
     return firstLine.length > 120 ? firstLine.slice(0, 117) + "\u2026" : firstLine;
@@ -489,7 +518,12 @@ export function ConsequencePanel({ sim }: { sim: SimResponse | null }) {
     const hashes: string[] = [];
     try {
       if (chainId !== MONAD_CHAIN_ID) {
-        await switchChainAsync({ chainId: MONAD_CHAIN_ID });
+        try {
+          await switchChainAsync({ chainId: MONAD_CHAIN_ID });
+        } catch {
+          setSendError("你取消了网络切换，或钱包未添加 Monad 网络。请先点击「切到 Monad」/「添加网络」再签名。");
+          return;
+        }
       }
       for (const tx of sim.plan.txs) {
         const h = await sendTransactionAsync({
@@ -523,7 +557,7 @@ export function ConsequencePanel({ sim }: { sim: SimResponse | null }) {
       switching={switching}
       sent={sent}
       sendError={sendError}
-      hasGas={hasGas}
+      gasState={gasState}
     />
   );
 }
