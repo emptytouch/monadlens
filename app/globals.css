@@ -14,11 +14,42 @@
   --color-violet-soft: #a394ff;
   --color-violet-deep: #4b3fa8;
   --font-mono: "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --color-ink-750: #2b2540;
+  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.03) inset,
+    0 10px 30px -16px rgba(0, 0, 0, 0.7);
+  --shadow-glow: 0 0 0 1px rgba(131, 110, 249, 0.22),
+    0 14px 40px -14px rgba(131, 110, 249, 0.35);
+}
+
+/* Tailwind's preflight resets buttons but does NOT give them a pointer cursor
+   (it only fixes Safari's number-input spinners), so every button in the app
+   showed the default arrow. Make "clickable" explicit — and keep disabled
+   controls honest with a not-allowed cursor. */
+@layer base {
+  button:not(:disabled),
+  [type="button"]:not(:disabled),
+  [type="submit"]:not(:disabled),
+  [role="button"]:not(:disabled),
+  summary,
+  select:not(:disabled) {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  [type="button"]:disabled,
+  [type="submit"]:disabled,
+  [role="button"]:disabled {
+    cursor: not-allowed;
+  }
 }
 
 html,
 body {
-  background: var(--color-ink-950);
+  background:
+    radial-gradient(1200px 620px at 88% -12%, rgba(131, 110, 249, 0.10), transparent 60%),
+    radial-gradient(900px 520px at -8% 0%, rgba(75, 63, 168, 0.07), transparent 55%),
+    var(--color-ink-950);
   color: var(--color-mist-200);
   -webkit-font-smoothing: antialiased;
 }

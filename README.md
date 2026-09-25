@@ -4,7 +4,7 @@
 
 一个跑在 Monad 链上的对话式链上助手。你用中文说要做什么，它构造交易；但在你签名之前，它先把这笔交易**真实执行后会发生什么**摊开给你看——转走什么、收到什么、授权给谁、钱最终落到哪个地址。
 
-> LXDAO × Monad 线上黑客松参赛作品
+> Monad Metropolis 黑客松参赛作品 · Track 04 Trust / Identity & AI Infra
 
 ---
 
@@ -13,6 +13,14 @@
 MonadLens 是一个跑在 **Monad 链**上的对话式链上助手 + 签名前后果透镜。你用中文描述想做的事，Agent 构造交易；但在你签名之前，系统通过 [Moss SDK](https://www.npmjs.com/package/@themoss/core) 在真实链上状态中模拟执行，把"转出什么、收到什么、授权给谁、钱最终落到哪个地址"用人话摊开，并对收款方掉包、金额膨胀、无限授权等攻击实时拦截。三栏一屏完成"看网络 → 说需求 → 看后果 → 签字"。
 
 项目支持 Monad 主网（chainId 143）与测试网（chainId 10143），通过环境变量一键切换；演示与本地验证默认走测试网免费水龙头，零成本跑通完整闭环。
+
+## 参赛信息 · Monad Metropolis（Track 04）
+
+- **赛事**：Monad Metropolis Hackathon（线上，Rise In 平台，截止 2026-10-13）
+- **赛道**：Track 04 — Trust / Identity & AI Infra
+- **一句话定位**：在 Agent 把意图变成签名之前，用人话告诉你这笔交易真实会发生什么，并拦下"Agent 说的"和"calldata 做的"不一致的交易。
+- **为什么契合 AI Infra 赛道**：Agent 自动发链上交易正在成为默认交互，但"Agent 描述的效果"与"链上真实效果"之间存在无人值守的信任盲区。MonadLens 把这道盲区做成了**可验证、可拦截的基础设施层**——它不替代 Agent，而是给所有 Agent 生成的交易加一道"后果透镜"。
+- **核心论点（评委看点）**：Moss 提供模拟内核，但 Moss 原生有三类**它根本看不到**的盲区（收款方归属、地址外观、离链签名溯源）。这三类由 MonadLens 在应用层补上。换言之，MonadLens 不是 Moss 套壳，而是在 Moss 之上长出了一层"只有应用才知道"的信任校验。
 
 ## 我们在解决什么问题
 
@@ -39,9 +47,9 @@ MonadLens 就是那一层。
 ## 主要功能
 
 - **实时链上仪表盘**：WebSocket 订阅 Monad 区块，实时 TPS、出块间隔、Gas 占用、基础费与活跃地址 / 合约榜。
-- **对话式 Agent 双脑**：规则引擎（零依赖、零幻觉）+ DeepSeek LLM（OpenAI 兼容）自动降级，中文自然语言查网络、解释交易、构造操作。
+- **对话式 Agent 双脑**：规则引擎（零依赖、零幻觉）+ LLM（OpenAI 兼容，当前接入智谱 glm-4-flash，可一键切 DeepSeek / Moonshot / OpenAI）自动降级，中文自然语言查网络、解释交易、构造操作。
 - **签名前后果透镜**：基于 Moss `debug_traceCall` 真实模拟，展示资金流出 / 流入、授权明细、收款方对账与安全告警。
-- **5 类攻击护栏**：金额膨胀、无限授权、夹带授权、收款方掉包、封印后篡改——判定 `blocked` 时签名按钮直接锁死。
+- **7 类攻击护栏（含 3 类 Moss 原生抓不到、MonadLens 自研补上的盲区）**：金额膨胀、无限授权、夹带授权、收款方掉包、零宽字符掉包、permit 重放、封印后篡改——判定 `blocked` 时签名按钮直接锁死。
 - **钱包集成**：连接钱包、签名广播、MonadScan 一键验证，并支持一键把 Monad 网络添加到钱包。
 - **多网络 + 多 RPC 容错**：主网 / 测试网一键切换，RPC 多端点 fallback，主网余额预检与友好错误提示。
 
@@ -64,55 +72,64 @@ MonadLens 就是那一层。
 
 Moss 提供 10 类告警（`REVERTED` / `PLAN_TAMPERED` / `OUTFLOW_EXCEEDS_MAX` / `UNDECLARED_APPROVAL` / `APPROVAL_EXCEEDS_MAX` / `MIN_INFLOW_NOT_MET` / ...）。
 
-### MonadLens 在 Moss 之上补了一层：收款方对账
+### MonadLens 在 Moss 之上补了三层：这是"不是 Moss 套壳"的关键
 
-Moss 的信封约束的是**转出多少**，不约束**转给谁**——`effects.recipients` 在 Moss 里是纯信息字段，不参与告警。
+Moss 已经很强，但它的告警来自对 calldata 和信封（`expects`）的对账。有三件事是 Moss 原生**看不到**的——因为它们是"应用层才知道"的信息，而不是链上状态：
 
-这留下一个真实攻击面：**金额一分不差，收款地址被换掉**。声明的 `out.amountMax` 完全满足，Moss 不会报警。
+1. **收款方对账（`UNDECLARED_RECIPIENT`，拦截级）**：Moss 的信封约束的是**转出多少**，不约束**转给谁**——`effects.recipients` 在 Moss 里是纯信息字段，不参与告警。于是"金额一分不差、收款地址被换掉"的攻击能过 Moss。MonadLens 知道界面展示给用户的收款方（`expectedRecipients`），自己做对账，任何未声明地址标红"未声明"，并归入 `blocked`。
+2. **地址外观检测（`MISLEADING_ADDRESS`，高风险）**：零宽字符 / 形似字符掉包，肉眼无法分辨、checksum 也认不出——这是展示层骗局，calldata 层面一切都"合法"。MonadLens 单独检测非 ASCII / 形近字符并告警。
+3. **签名溯源（`PERMIT_REPLAY_RISK`，高风险）**：EIP-2612 permit 攻击里，危险在于那份**离链签名**——Moss 只看到 permit + transferFrom 的 calldata，看不到"这份授权来自你被社工诱导签下的离链 permit、且可跨会话/跨链重放"。MonadLens 在意图层就标出这条 provenance 盲区。
 
-MonadLens 知道用户在界面上被展示的收款方是谁（`expectedRecipients`），于是自己做这一层对账，产出 `UNDECLARED_RECIPIENT` 告警，并归入拦截级。收款方列表里，任何未声明的地址会被标红打上"未声明"。
+这三层不是绕过 Moss，而是补上只有应用层才有的信息——**只有应用知道用户到底被告诉了什么、看到了什么、签下了什么**。这也是参加 Trust / AI Infra 赛道的核心论点。
 
-这不是绕过 Moss，而是补上应用层才有的信息——只有应用知道"用户到底被告诉了什么"。
-
-## 内置的 5 个攻击演示
+## 内置的 7 个攻击演示
 
 产品自带一套"攻击注入"开关，用来证明这层防护不是摆设。**永远只在用户明确要求演示时启用**，正常请求一律 `tamper: none`。
 
-| 演示 | 注入方式 | 被什么抓住 |
-|---|---|---|
-| 金额放大 | 声明转 1 份，calldata 转 5 份 | `OUTFLOW_EXCEEDS_MAX` |
-| 无限授权 | 口头说批 100，calldata 请求 `uint256.max` | `APPROVAL_EXCEEDS_MAX` |
-| 夹带授权 | 正常转账后面偷偷追加一笔无限授权 | `UNDECLARED_APPROVAL` |
-| 收款方掉包 | 金额不动，收款地址换成攻击者 | `UNDECLARED_RECIPIENT` ← 本项目补的 |
-| 封印后篡改 | 计划封印后改写 `tx.to` | `PLAN_TAMPERED`（planHash 对不上） |
+| 演示 | 注入方式 | 被什么抓住 | 谁抓的 |
+|---|---|---|---|
+| 金额放大 | 声明转 1 份，calldata 转 5 份 | `OUTFLOW_EXCEEDS_MAX` | Moss |
+| 无限授权 | 口头说批 100，calldata 请求 `uint256.max` | `APPROVAL_EXCEEDS_MAX` | Moss |
+| 夹带授权 | 正常转账后偷偷追加一笔无限授权 | `UNDECLARED_APPROVAL` | Moss |
+| 收款方掉包 | 金额不动，收款地址换成攻击者 | `UNDECLARED_RECIPIENT` | **MonadLens 自研** |
+| 零宽字符掉包 | 展示的地址夹带不可见字符，肉眼与原地址一致 | `MISLEADING_ADDRESS` | **MonadLens 自研** |
+| permit 重放 | 假 DEX"签名验证"实为 EIP-2612 permit 授权+抽干 | `PERMIT_REPLAY_RISK` | **MonadLens 自研** |
+| 封印后篡改 | 计划封印后改写 `tx.to` | `PLAN_TAMPERED`（planHash 对不上） | Moss |
 
-5 条路径全部实测在 Monad 主网模拟下产出 `blocked`，签名按钮锁死。
+另有一条**兑换拦截**路径：用户要求把 MON 换成 USDC 等非 WMON 代币时，MonadLens 不做真兑换（测试网上无可用 DEX），而是直接演示"假 DEX 骗签名"的 permit 重放骗局——把"想换币"这个最高发钓鱼场景当场拆穿。
+
+7 条路径全部实测在 Monad 测试网（默认演示网络）模拟下产出 `blocked`（自研 warn 级的两类在真实持币账户下表现为高风险告警；演示用零余额账户会触发 transferFrom revert，同样 `blocked`），签名按钮锁死。
 
 ## 演示脚本（约 3 分钟）
 
 ```
-1. 打开页面 —— 左栏区块在实时滚动，这是真实的链上状态（演示默认走测试网，免费且无风险）
-   "现在 Monad 网络怎么样？"
-   → 出块间隔 ~0.3s，吞吐 ~40 tx/s，Gas 占用 4%
+1. 打开页面 —— 左栏真实链上区块在滚动（演示默认走测试网，免费无风险），中栏可直接用中文下指令。
+   "现在 Monad 网络怎么样？"  → 实时 TPS / 出块间隔 / Gas 占用 / 基础费。
 
-2. 正常操作，走通全流程
-   "把 0.01 MON 包装成 WMON"
-   → 右栏：流出 0.01 MON，流入 0.01 WMON，无告警，判定"可安全签名"
-   → 连接钱包，点签名，MonadScan 上能查到
+2. 正常操作跑通全流程
+   "把 0.01 MON 包装成 WMON"  → 右栏流出 0.01 MON / 流入 0.01 WMON，无告警，判定「可安全签名」；
+   连接钱包点签名后可在 MonadScan 查到。
 
-3. 现在让 Agent 变坏
-   "演示一次不安全的授权，授权 100 USDC 给 0x2222..."
-   → 右栏：授权额度 115792089237316195423570985008687907853269984665640564039457584007913129639935
-   → 告警"授权额度超过声明"，判定"已拦截"，按钮锁死
+3. 让 Agent 变坏（金额类，Moss 抓）
+   "演示一次不安全的授权，授权 100 USDC 给 0x2222…"
+   → 授权额度 uint256.max（11579…39935），告警「授权额度超过声明」，判定「已拦截」，签名按钮锁死。
 
-4. 最隐蔽的一种
-   "把收款地址换掉，转 0.5 MON 给 0x1111..."
-   → 金额一分不差，但收款方那栏标红：0xdEaD...BEEF「未声明」
-   → 这是 Moss 原生规则抓不到的，MonadLens 补的对账层抓住了
+4. 最隐蔽的掉包（Moss 抓不到，MonadLens 自研）
+   "把收款地址换掉，转 0.5 MON 给 0x1111…"
+   → 金额一分不差，但收款方那栏标红 0xdEaD…BEEF「未声明」——Moss 原生规则漏掉，自研对账层抓住。
+   （同类还有「零宽字符掉包」：展示的地址夹带不可见字符，肉眼与原地址一模一样。）
 
-5. 最后证明封印有效
-   "封印后篡改计划，把 1 MON 包装成 WMON"
-   → planHash 校验失败，"计划被篡改，绝对不要签名"
+5. 离链签名的骗局（permit 重放，MonadLens 自研）
+   "演示 permit 重放攻击"  → 右栏拆穿：你以为在 DApp 里「签名验证/登录」，实际签下 EIP-2612 permit，
+   攻击者拿着这份可重放的离链签名 permit + transferFrom 抽干余额；Moss 只看到 calldata，看不出这是被社工
+   诱导的离链签名——这条 provenance 盲区由 MonadLens 单独标出。
+
+6. 兑换场景当场拆穿
+   "把 1 MON 换成 USDC"  → MonadLens 不做真兑换（测试网无可用 DEX），而是直接演示「假 DEX 骗签名」的
+   permit 重放骗局，把"想换币"这个最高发钓鱼场景拆给你看。
+
+7. 最后证明封印有效
+   "封印后篡改计划，把 1 MON 包装成 WMON"  → planHash 校验失败，「计划被篡改，绝对不要签名」。
 ```
 
 ## Agent 的双脑设计
@@ -123,6 +140,8 @@ MonadLens 知道用户在界面上被展示的收款方是谁（`expectedRecipie
 - **LLM**（`lib/agent/llm.ts`）：配置了 `LLM_API_KEY` 时启用，走 function calling，理解更自由的表达。**任何失败都自动回落到规则引擎**，并在气泡上标出"降级"。
 
 一把过期的 Key 不该让 demo 当场翻车。响应里的 `engine` 字段会显示当前是哪个脑子在工作。
+
+**确定性短路**：兑换请求（`把 MON 换成 USDC` 等）与明确的攻击演示短语（`掉包` / `封印后篡改` / `零宽` / `不安全授权` 等）会被**直接交给规则引擎**，跳过 LLM。这类路径是脚本化的，而 glm-4-flash 在把中文篡改提示映射到 `tamper` 字段上并不可靠——用确定性结果保证评委现场手打演示短语也一定能触发正确演示。只有自由表达（查网络、普通转账、闲聊）才走 LLM。
 
 ## 安装与运行
 
@@ -162,13 +181,14 @@ npm run start -- -p 3000
 python scripts/e2e.py http://127.0.0.1:3000
 ```
 
-覆盖 12 条 Agent 路由 + 3 条正常模拟 + 6 条攻击拦截 + 2 个链上查询，共 23 项。
+覆盖 15 条 Agent 路由 + 3 条正常模拟 + 8 条攻击/盲区拦截 + 2 个链上查询，共 28 项。
 
 ## 部署
 
 MonadLens 是标准 Next.js 应用，模拟接口依赖 `debug_traceCall`，**必须运行在 Node.js runtime**（已在 `next.config.ts` 配置 `runtime = "nodejs"`）。
 
 - **自托管 / VPS**：`npm run build` 后 `npm run start -- -p 3000`，用 Nginx / Caddy 反代并配置 HTTPS。
+- **Netlify**：仓库已含 `netlify.toml`（Next.js 插件 + `npm run build`）。纯文档/资源类提交（pptx/docx/md/html）会被 `scripts/check-build.sh` 跳过构建，只有代码改动才触发部署。导入仓库即部署，Node 22+。
 - **Vercel / Serverless**：直接导入仓库，`build` 命令 `npm run build`，无需额外配置（确保平台使用 Node 22+）。
 - **Docker**：基于 `node:22-alpine`，先 `npm install` 再 `npm run build && npm run start`。
 

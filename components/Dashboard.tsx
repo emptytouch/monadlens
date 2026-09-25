@@ -6,7 +6,7 @@ import { useMonadStream } from "@/lib/useMonadStream";
 import { TpsChart } from "./TpsChart";
 import { GasChart } from "./GasChart";
 import { formatAmount, formatNumber, shortAddr } from "@/lib/format";
-import { explorerBlock, explorerTx, explorerAddress, MONAD_CHAIN_ID, MONAD_NETWORK_LABEL, MONAD_IS_TESTNET, MONAD_FAUCET_URL } from "@/lib/chain";
+import { explorerBlock, explorerTx, explorerAddress, MONAD_CHAIN_ID, MONAD_NETWORK_LABEL } from "@/lib/chain";
 
 function StatusDot({ status, source }: { status: string; source: string | null }) {
   const map: Record<string, { color: string; label: string; pulse: boolean }> = {
@@ -41,7 +41,7 @@ function ConnectingHint({ seconds }: { seconds: number }) {
 
 function Stat({ label, value, unit }: { label: string; value: string; unit?: string }) {
   return (
-    <div className="rounded-lg border border-ink-700 bg-ink-850 px-3 py-2.5">
+    <div className="rounded-xl border border-ink-700 bg-ink-900 shadow-panel px-3 py-2.5">
       <div className="text-[11px] text-mist-400">{label}</div>
       <div className="mt-1 flex items-baseline gap-1">
         <span className="tabular text-lg font-medium text-mist-200">{value}</span>
@@ -51,8 +51,15 @@ function Stat({ label, value, unit }: { label: string; value: string; unit?: str
   );
 }
 
-export function Dashboard() {
-  useMonadStream();
+export function Dashboard({
+  sentHashes = [],
+  onInspectAddress,
+}: {
+  /** Tx hashes the user broadcast in this session — highlighted in the feed. */
+  sentHashes?: string[];
+  /** Hand an address to the agent ("who is this?") instead of only linking out. */
+  onInspectAddress?: (addr: string) => void;
+}) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
@@ -67,6 +74,22 @@ export function Dashboard() {
   const metrics = _metrics ?? { tps: 0, blockTime: 0, gasPct: 0, baseFeeGwei: 0, latest: null, txWindow: 0 };
 
   // Busiest addresses/contracts from the live tx feed — a quick "who's active".
+  const mineSet = useMemo(
+    () => new Set(sentHashes.map((h) => h.toLowerCase())),
+    [sentHashes],
+  );
+
+  // Broadcast but not yet seen in a block. Without this the dashboard looks
+  // completely unchanged for the seconds between signing and the tx landing in
+  // a block, which reads as "the highlight didn't work".
+  const pendingMine = useMemo(
+    () => sentHashes.filter((h) => !txs.some((t) => t.hash.toLowerCase() === h.toLowerCase())),
+    [sentHashes, txs],
+  );
+
+  // Poll faster while one of the user's own broadcasts is still pending.
+  useMonadStream(pendingMine);
+
   const activity = useMemo(() => {
     const counts = new Map<string, number>();
     for (const tx of txs) {
@@ -97,14 +120,6 @@ export function Dashboard() {
           <h2 className="text-sm font-medium text-mist-200">网络正在发生什么</h2>
           <p className="text-[11px] text-mist-400">
             {MONAD_NETWORK_LABEL} · chainId {MONAD_CHAIN_ID}
-            {MONAD_IS_TESTNET && MONAD_FAUCET_URL ? (
-              <>
-                {" · "}
-                <a href={MONAD_FAUCET_URL} target="_blank" rel="noreferrer" className="text-sky-400 hover:underline">
-                  领测试币
-                </a>
-              </>
-            ) : null}
           </p>
         </div>
         <StatusDot status={status} source={source} />
@@ -119,7 +134,7 @@ export function Dashboard() {
         <Stat label="基础费" value={metrics.baseFeeGwei.toFixed(1)} unit="gwei" />
       </div>
 
-      <div className="rounded-lg border border-ink-700 bg-ink-850 px-3 py-2">
+      <div className="rounded-xl border border-ink-700 bg-ink-900 shadow-panel px-3 py-2">
         <div className="mb-1 flex items-center justify-between">
           <span className="text-[11px] text-mist-400">实时吞吐</span>
           <span className="tabular text-[11px] text-mist-400">
@@ -129,7 +144,7 @@ export function Dashboard() {
         <TpsChart series={series} />
       </div>
 
-      <div className="rounded-lg border border-ink-700 bg-ink-850 px-3 py-2">
+      <div className="rounded-xl border border-ink-700 bg-ink-900 shadow-panel px-3 py-2">
         <div className="mb-1 flex items-center justify-between">
           <span className="text-[11px] text-mist-400">Gas 基础费趋势</span>
           <span className="tabular text-[11px] text-mist-400">
@@ -168,24 +183,44 @@ export function Dashboard() {
       </section>
 
       <section>
-        <h3 className="mb-1.5 text-[11px] text-mist-400">活跃地址榜（实时）</h3>
+        <h3 className="mb-1.5 flex items-center justify-between text-[11px] text-mist-400">
+          <span>最近交易对手（实时）</span>
+          <span className="text-[10px] text-mist-500">点地址交给 Agent 查身份</span>
+        </h3>
         <div className="space-y-1">
           {activity.map(([addr, count]) => (
-            <a
+            <div
               key={addr}
-              href={explorerAddress(addr)}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center justify-between rounded-md border border-ink-700 bg-ink-850 px-2.5 py-1.5 font-mono text-[11px] transition-colors hover:border-violet-deep"
+              className="flex items-center justify-between gap-2 rounded-md border border-ink-700 bg-ink-850 px-2.5 py-1.5 font-mono text-[11px] transition-colors hover:border-violet-deep"
             >
-              <span className="text-mist-300">{shortAddr(addr, 6)}</span>
+              <button
+                onClick={() => onInspectAddress?.(addr)}
+                title={`让 Agent 查一下 ${addr}`}
+                className="min-w-0 flex-1 truncate text-left text-mist-300 transition-colors hover:text-violet-soft"
+              >
+                {shortAddr(addr, 6)}
+              </button>
               <span className="tabular text-violet-soft">{count} 笔</span>
-            </a>
+              <a
+                href={explorerAddress(addr)}
+                target="_blank"
+                rel="noreferrer"
+                title="在区块浏览器打开"
+                className="text-[10px] text-mist-500 transition-colors hover:text-mist-200"
+              >
+                ↗
+              </a>
+            </div>
           ))}
           {activity.length === 0 && (
             <div className="rounded-md border border-dashed border-ink-700 px-2.5 py-3 text-center text-[11px] text-mist-400">
               等待交易活动…
             </div>
+          )}
+          {activity.length > 0 && (
+            <p className="text-[10px] leading-relaxed text-mist-500">
+              统计口径：最近 {txs.length} 笔交易（窗口上限 24 笔），不是全链排行。
+            </p>
           )}
         </div>
       </section>
@@ -193,22 +228,54 @@ export function Dashboard() {
       <section className="min-h-0 flex-1">
         <h3 className="mb-1.5 text-[11px] text-mist-400">实时交易</h3>
         <div className="space-y-1">
-          {txs.slice(0, 10).map((tx) => (
+          {pendingMine.map((h) => (
             <a
-              key={tx.hash}
-              href={explorerTx(tx.hash)}
+              key={h}
+              href={explorerTx(h)}
               target="_blank"
               rel="noreferrer"
-              className="animate-row-in flex items-center justify-between gap-2 rounded-md border border-ink-700 bg-ink-850 px-2.5 py-1.5 font-mono text-[11px] transition-colors hover:border-violet-deep"
+              className="animate-row-in flex items-center justify-between gap-2 rounded-md border border-violet-brand/50 bg-violet-brand/10 px-2.5 py-1.5 font-mono text-[11px] transition-colors hover:border-violet-brand"
             >
-              <span className="text-mist-400">{shortAddr(tx.from, 4)}</span>
-              <span className="text-ink-600">→</span>
-              <span className="text-mist-400">{tx.to ? shortAddr(tx.to, 4) : "合约创建"}</span>
-              <span className="tabular ml-auto text-violet-soft">
-                {tx.value > 0n ? `${formatAmount(tx.value, 18, 3)} MON` : "—"}
+              <span className="text-violet-soft">{shortAddr(h, 6)}</span>
+              <span className="rounded bg-violet-brand/25 px-1.5 py-0.5 text-[9px] font-sans text-violet-soft">
+                你已广播 · 等待上链
               </span>
+              <span className="text-[10px] text-mist-400">↗</span>
             </a>
           ))}
+          {txs.slice(0, 10).map((tx) => {
+            // A tx the user just signed here: make it unmistakable in the feed.
+            const mine = mineSet.has(tx.hash.toLowerCase());
+            return (
+              <a
+                key={tx.hash}
+                href={explorerTx(tx.hash)}
+                target="_blank"
+                rel="noreferrer"
+                className={`animate-row-in flex items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 font-mono text-[11px] transition-colors hover:border-violet-deep ${
+                  mine
+                    ? "border-violet-brand/60 bg-violet-brand/10 shadow-glow"
+                    : "border-ink-700 bg-ink-850"
+                }`}
+              >
+                <span className={mine ? "text-violet-soft" : "text-mist-400"}>
+                  {shortAddr(tx.from, 4)}
+                </span>
+                <span className="text-ink-600">→</span>
+                <span className={mine ? "text-violet-soft" : "text-mist-400"}>
+                  {tx.to ? shortAddr(tx.to, 4) : "合约创建"}
+                </span>
+                {mine && (
+                  <span className="rounded bg-violet-brand/25 px-1.5 py-0.5 text-[9px] font-sans text-violet-soft">
+                    你签名广播
+                  </span>
+                )}
+                <span className={`tabular ml-auto ${mine ? "text-violet-soft" : "text-violet-soft"}`}>
+                  {tx.value > 0n ? `${formatAmount(tx.value, 18, 3)} MON` : "—"}
+                </span>
+              </a>
+            );
+          })}
           {txs.length === 0 && (
             <div className="rounded-md border border-dashed border-ink-700 px-2.5 py-3 text-center text-[11px] text-mist-400">
               等待交易…

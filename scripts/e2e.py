@@ -54,6 +54,9 @@ AGENT_CASES = [
     ("偷偷夹带一笔授权，转 0.01 MON 给 " + PEER, "build_plan", "hidden_approval"),
     ("把收款地址换掉，转 0.5 MON 给 " + PEER, "build_plan", "swap_recipient"),
     ("换掉收款地址，转 0.5 MON 给 " + PEER, "build_plan", "swap_recipient"),
+    ("把收款地址用零宽字符掉包，转 0.5 MON 给 " + PEER, "build_plan", "spoof_recipient"),
+    ("演示 permit 重放攻击", "build_plan", "none"),
+    ("把 1 MON 换成 USDC", "build_plan", "none"),
     ("封印后篡改计划，把 1 MON 包装成 WMON", "build_plan", "after_seal"),
 ]
 ok_n = 0
@@ -100,27 +103,34 @@ results["normal"] = (ok_n, len(NORMAL))
 section("3. Simulate 攻击/篡改路径（期望 blocked）")
 ATTACKS = [
     ("inflate_amount(native)",
-     {"intent": {"kind": "transfer_native", "to": PEER, "amount": "0.01"}, "tamper": "inflate_amount"}),
+     {"intent": {"kind": "transfer_native", "to": PEER, "amount": "0.01"}, "tamper": "inflate_amount"}, "blocked"),
     ("unlimited_approval",
-     {"intent": {"kind": "approve", "token": "USDC", "spender": SPENDER, "amount": "10"}, "tamper": "unlimited_approval"}),
+     {"intent": {"kind": "approve", "token": "USDC", "spender": SPENDER, "amount": "10"}, "tamper": "unlimited_approval"}, "blocked"),
     ("hidden_approval(native)",
-     {"intent": {"kind": "transfer_native", "to": PEER, "amount": "0.01"}, "tamper": "hidden_approval"}),
+     {"intent": {"kind": "transfer_native", "to": PEER, "amount": "0.01"}, "tamper": "hidden_approval"}, "blocked"),
     ("hidden_approval(wrap)",
-     {"intent": {"kind": "wrap", "amount": "0.01"}, "tamper": "hidden_approval"}),
+     {"intent": {"kind": "wrap", "amount": "0.01"}, "tamper": "hidden_approval"}, "blocked"),
     ("swap_recipient(native)",
-     {"intent": {"kind": "transfer_native", "to": PEER, "amount": "0.01"}, "tamper": "swap_recipient"}),
+     {"intent": {"kind": "transfer_native", "to": PEER, "amount": "0.01"}, "tamper": "swap_recipient"}, "blocked"),
     ("tamper_after_seal",
-     {"intent": {"kind": "wrap", "amount": "0.01"}, "tamperAfterSeal": True}),
+     {"intent": {"kind": "wrap", "amount": "0.01"}, "tamperAfterSeal": True}, "blocked"),
+    ("spoof_recipient(native)",
+     {"intent": {"kind": "transfer_native", "to": PEER, "amount": "0.01"}, "tamper": "spoof_recipient"}, "warn"),
+    ("permit_drain",
+     {"intent": {"kind": "permit_drain", "token": "USDC", "attacker": SPENDER, "amount": "100"}}, "blocked"),
 ]
 ok_n = 0
-for name, payload in ATTACKS:
+for name, payload, mode in ATTACKS:
     payload["account"] = ACCOUNT
     r = post("/api/simulate", payload)
     v = r.get("verdict")
     sim = r.get("simulation") or {}
     warns = [w.get("code") for w in (sim.get("warnings") or [])]
     eff = sim.get("effects") or {}
-    ok = v == "blocked"
+    if mode == "blocked":
+        ok = v == "blocked"
+    else:  # warn-level self-built demo: must surface the warning (verdict safe is a fail)
+        ok = v in ("blocked", "warn") and "MISLEADING_ADDRESS" in warns
     ok_n += ok
     print(f"[{'PASS' if ok else 'FAIL'}] {name:<24} verdict={v} planHashValid={sim.get('planHashValid')} "
           f"reverted={sim.get('reverted')} warnings={warns}")

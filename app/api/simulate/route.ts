@@ -48,6 +48,68 @@ function recipientWarning(
   };
 }
 
+/**
+ * A second MonadLens-only check (Moss never inspects address *appearance*):
+ * if any declared recipient contains non-ASCII / invisible characters — the
+ * classic zero-width-character spoof where the shown address looks identical
+ * to the real one — flag it. This is the address-layer counterpart to the
+ * recipient reconciliation above; together they close two gaps Moss leaves.
+ */
+const MISLEADING_ADDRESS = "MISLEADING_ADDRESS";
+
+function misleadingAddressWarning(
+  expected: readonly string[],
+): { code: string; message: string } | null {
+  const suspicious = expected.filter((a) => !/^0x[0-9a-fA-F]{40}$/.test(a));
+  if (suspicious.length === 0) return null;
+  return {
+    code: MISLEADING_ADDRESS,
+    message: `声明里的收款地址含有不可见 / 形似字符（零宽字符等），肉眼无法分辨，但它是另一个不同的地址：${suspicious.join("、")}`,
+  };
+}
+
+/**
+ * A third MonadLens-only check (Moss never inspects a signature's *provenance*):
+ * a permit-replay attack grants an allowance via an off-chain EIP-2612
+ * signature the victim was socially engineered into signing (it looks like
+ * "verify / log in"). Moss traces the resulting permit + transferFrom calldata
+ * but has no notion that the allowance originated from a tricked signature —
+ * nor that the same signature is replayable across sessions / chains. This is
+ * the signature-provenance counterpart to the recipient + address blind spots;
+ * it fires unconditionally because the danger is the attack's origin, not
+ * whether the trace happened to revert.
+ */
+/**
+ * A fourth MonadLens-only check: the zero address is a black hole. Moss
+ * reconciles *how much* leaves the wallet and matches declared recipients, but
+ * has no notion of whether the payee can ever spend the funds — so a transfer
+ * to 0x000…000 simulates perfectly clean and reads "safe" while permanently
+ * destroying the balance. This is the classic copy-the-wrong-address mistake,
+ * and it is irreversible.
+ */
+const BURN_ADDRESS = "BURN_ADDRESS";
+
+function burnAddressWarning(
+  addrs: readonly string[],
+): { code: string; message: string } | null {
+  const zero = addrs.filter((a) => /^0x0{40}$/i.test(String(a).trim()));
+  if (zero.length === 0) return null;
+  return {
+    code: BURN_ADDRESS,
+    message: `收款方是零地址 0x000…000：资金一旦转入即永久销毁，任何人都无法再取出（包括你自己），且不可撤销：${[...new Set(zero)].join("、")}`,
+  };
+}
+
+const PERMIT_REPLAY_RISK = "PERMIT_REPLAY_RISK";
+
+function permitReplayWarning(): { code: string; message: string } {
+  return {
+    code: PERMIT_REPLAY_RISK,
+    message:
+      "这笔授权来自一份离链 EIP-2612 permit 签名——你以为是在 DApp 里「签名验证 / 登录」，实际把代币支配权签给了攻击者，同一份签名还能跨会话、跨链重放。本 demo 用占位签名，trace 里 permit 会因签名无效而回滚；真实攻击中攻击者持有你的有效签名，会真正授予授权并抽干余额。Moss 只看 calldata、看不到签名来源，这条盲区由 MonadLens 补上。",
+  };
+}
+
 function decideVerdict(reverted: boolean, warnings: { code: string }[]): Verdict {
   if (reverted) return "blocked";
   const blocking = new Set([
@@ -59,66 +121,122 @@ function decideVerdict(reverted: boolean, warnings: { code: string }[]): Verdict
     "NFT_OPERATOR_GRANTED",
     "UNDECLARED_NFT_OUT",
     UNDECLARED_RECIPIENT,
+    // Irreversible: sending to 0x0 destroys the funds outright, so this must
+    // hard-block the sign button rather than just warn.
+    BURN_ADDRESS,
   ]);
   if (warnings.some((w) => blocking.has(w.code))) return "blocked";
   return warnings.length > 0 ? "warn" : "safe";
 }
 
 /**
- * Runs the Moss trace simulator across all configured RPCs in *parallel* and
- * returns whichever responds first — instead of the old serial fallback that
- * could block ~20s on a single slow/unsupported endpoint before moving on.
+ * Runs the Moss trace simulator against every configured RPC.
+ *
+ * Two failure modes this is built around (both observed on Monad testnet):
+ *
+ *  1. ONE SLOW ENDPOINT POISONED THE RESULT. The previous version raced
+ *     `Promise.all(attempts)` against a 25 s timeout. Promise.all only settles
+ *     when *every* endpoint settles, so an endpoint that hangs — or one that
+ *     rejects `debug_traceCall` slowly, e.g. Monad Foundation's public node
+ *     which disallows debug_* — held the whole request to the 25 s wire even
+ *     though a good endpoint had already answered in 2 s. Measured: 14 s, 24 s
+ *     and outright timeouts for the same request.
+ *     Fix: per-endpoint timeouts + resolve on the FIRST success.
+ *
+ *  2. PUBLIC NODES ARE FLAKY, not broken. A single trace can time out and then
+ *     succeed a second later, so one miss used to fail the whole demo.
+ *     Fix: retry within the overall budget.
  *
  * A reverted plan is a *successful* trace (verdict=blocked), not an error —
  * only RPC / method-unavailable failures count as failures here.
- *
- * An overall timeout (25 s) guards against the case where every endpoint is
- * slow: we fail fast with a clear message rather than hanging the request.
  */
 type Simulator = ReturnType<typeof createTraceSimulator>;
 type SimOutcome = Awaited<ReturnType<Simulator["simulate"]>>;
+type Attempt =
+  | { ok: true; value: SimOutcome; rpcUrl: string }
+  | { ok: false; error: unknown; rpcUrl: string };
+
+const OVERALL_TIMEOUT_MS = 25_000;
+const PER_ENDPOINT_TIMEOUT_MS = 9_000;
+const MAX_ROUNDS = 2;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(label)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+/** Resolves with the first successful attempt, or the first failure if every
+ *  endpoint failed. Safe because every attempt carries its own timeout. */
+function firstSuccess(attempts: Promise<Attempt>[]): Promise<Attempt> {
+  return new Promise<Attempt>((resolve) => {
+    let remaining = attempts.length;
+    let firstFailure: Attempt | undefined;
+    for (const attempt of attempts) {
+      attempt.then((result) => {
+        if (result.ok) {
+          resolve(result);
+          return;
+        }
+        firstFailure ??= result;
+        if (--remaining === 0) resolve(firstFailure);
+      });
+    }
+  });
+}
 
 async function runSimulate(plan: BuiltPlan["plan"]): Promise<SimOutcome> {
   if (simulators.length === 0) {
     throw new SimulatorUnavailableError("未配置任何 RPC 端点");
   }
 
-  const attempts = simulators.map(({ rpcUrl, simulator }) =>
-    simulator.simulate([plan]).then(
-      (value) => ({ ok: true as const, value, rpcUrl }),
-      (error) => ({ ok: false as const, error, rpcUrl }),
-    ),
-  );
+  const deadline = Date.now() + OVERALL_TIMEOUT_MS;
+  let lastError: unknown = new Error("所有 RPC 端点模拟失败");
+  let rounds = 0;
 
-  const OVERALL_TIMEOUT_MS = 25_000;
-  const timeout = new Promise<never>((_, reject) =>
-    setTimeout(
-      () => reject(new Error("模拟超时：所有 RPC 端点均无响应，请稍后重试或检查网络")),
-      OVERALL_TIMEOUT_MS,
-    ),
-  );
+  for (let round = 1; round <= MAX_ROUNDS; round++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    rounds = round;
 
-  // Race the parallel attempts against the overall timeout. Each attempt is
-  // already resolved (never rejects) thanks to the .then() wrapper above, so
-  // the only way Promise.race settles with a rejection is the timeout.
-  const settled = await Promise.race([
-    Promise.all(attempts),
-    timeout.catch((e) => e as Error),
-  ]).catch((e) => e as Error);
+    const budget = Math.min(PER_ENDPOINT_TIMEOUT_MS, Math.max(2_000, remaining));
+    const attempts = simulators.map(({ rpcUrl, simulator }) =>
+      withTimeout(simulator.simulate([plan]), budget, `${rpcUrl} 响应超时`).then(
+        (value): Attempt => ({ ok: true, value, rpcUrl }),
+        (error): Attempt => ({ ok: false, error, rpcUrl }),
+      ),
+    );
 
-  if (settled instanceof Error) {
-    // Timed out — throw directly so the caller shows a clear timeout message.
-    throw settled;
+    const result = await Promise.race([
+      firstSuccess(attempts),
+      // Wall-clock guard: firstSuccess always settles (every attempt has a
+      // timeout), but this keeps the promise from outliving the request.
+      new Promise<Attempt>((resolve) =>
+        setTimeout(
+          () => resolve({ ok: false, error: new Error("本轮模拟整体超时"), rpcUrl: "" }),
+          Math.max(1_000, remaining),
+        ),
+      ),
+    ]);
+
+    if (result.ok) return result.value;
+    lastError = result.error;
   }
 
-  const results = settled as { ok: boolean; value?: unknown; error?: unknown; rpcUrl: string }[];
-  const winner = results.find((r) => r.ok);
-  if (winner?.ok) {
-    return winner.value as SimOutcome;
-  }
-
-  // All endpoints failed — surface the first error for a useful message.
-  throw results[0]?.error ?? new Error("所有 RPC 端点模拟失败");
+  const detail = lastError instanceof Error ? lastError.message : String(lastError ?? "");
+  throw new Error(
+    `模拟超时：${rounds} 轮尝试内所有 RPC 端点均无响应（公共节点偶发抖动，已自动重试 ${rounds} 次）。${detail ? `最后错误：${detail}` : ""}请再试一次。`,
+  );
 }
 
 export async function POST(request: Request) {
@@ -158,11 +276,32 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: "模拟未返回结果" }, { status: 502 });
     }
 
-    // Moss's warnings plus our own recipient reconciliation.
-    const extra = result.reverted
+    // Moss's warnings plus our own recipient reconciliation AND address-safety
+    // checks — both are MonadLens-built layers Moss does not provide.
+    const recipientExtra = result.reverted
       ? null
       : recipientWarning(result.effects.recipients, built.expectedRecipients);
-    const warnings = extra ? [...result.warnings, extra] : [...result.warnings];
+    const addressExtra = result.reverted
+      ? null
+      : misleadingAddressWarning(built.expectedRecipients);
+    // Widened from Moss's `Warning[]` (whose `code` is a closed union) so the
+    // MonadLens-built warnings below can be pushed into the same list.
+    const warnings: { code: string; message: string }[] = [...result.warnings];
+    if (recipientExtra) warnings.push(recipientExtra);
+    if (addressExtra) warnings.push(addressExtra);
+    // MonadLens self-built blind spots tagged by buildPlan (e.g. permit-replay
+    // provenance). These fire unconditionally — the danger is the attack's
+    // *provenance*, not the trace outcome, so they are not gated on `reverted`.
+    for (const flag of built.lensFlags ?? []) {
+      if (flag === "PERMIT_REPLAY") warnings.push(permitReplayWarning());
+    }
+    // Zero-address burn. Also unconditional: even if the plan reverted for some
+    // other reason, the user still needs to know the payee is a black hole.
+    const burnExtra = burnAddressWarning([
+      ...built.expectedRecipients,
+      ...(result.effects?.recipients ?? []),
+    ]);
+    if (burnExtra) warnings.push(burnExtra);
 
     // Testnet-only: Moss can't parse the testnet WMON mint event, so it wrongly
     // reports MIN_INFLOW_NOT_MET (到账不足). This is a known false positive on

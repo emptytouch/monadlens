@@ -102,11 +102,20 @@ async function addressSummary(address: string) {
     return { ok: false, error: "地址格式不对" };
   }
   const addr = address as Address;
-  const [balance, nonce, code] = await Promise.all([
+  const [balance, nonce] = await Promise.all([
     client.getBalance({ address: addr }),
     client.getTransactionCount({ address: addr }),
-    client.getCode({ address: addr }).catch(() => undefined),
   ]);
+  // getCode must NOT be swallowed: an RPC that errors here would make every
+  // counterparty look like an EOA, silently disabling the contract-warning
+  // layer. Fail loudly instead so the UI shows "unknown" rather than a wrong
+  // "external account" badge.
+  let code: `0x${string}` | undefined;
+  try {
+    code = await client.getCode({ address: addr });
+  } catch (err) {
+    return { ok: false, error: `无法读取合约代码（${err instanceof Error ? err.message : "RPC 错误"}）` };
+  }
   return {
     ok: true,
     kind: "address_summary" as const,

@@ -128,37 +128,39 @@ const MAINNET_TOKENS: Record<string, TokenMeta> = {
   },
 };
 
-/** Testnet tokens (chainId 10143), from Monad's developer docs tokenlist. */
+/**
+ * Testnet tokens (chainId 10143), from Monad's official token list:
+ * https://github.com/monad-crypto/token-list/blob/main/tokenlist-testnet.json
+ *
+ * IMPORTANT: the testnet went through a regenesis (Apr 2026) and every token
+ * was redeployed — the pre-regenesis addresses (WMON 0x760AfE86…, USDC
+ * 0xf817257f…) are now EMPTY (no bytecode). Building a plan against them
+ * silently does nothing: the trace reports no mint, no approval event and no
+ * outflow, so every token-based attack demo read "safe" instead of showing
+ * the interception. Always verify an address here has bytecode before use.
+ *
+ * USDT / WSOL are intentionally absent: they are not in the official list and
+ * their old addresses are also dead. Asking for them now fails loudly
+ * ("不认识这个代币") instead of silently simulating an empty call.
+ */
 const TESTNET_TOKENS: Record<string, TokenMeta> = {
   WMON: {
     symbol: "WMON",
     name: "Wrapped MON (Testnet)",
-    address: "0x760AfE86e5de5fa0Ee542fc7B7B713e1c5425701",
+    address: "0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541",
     decimals: 18,
   },
   USDC: {
     symbol: "USDC",
     name: "USD Coin (Testnet)",
-    address: "0xf817257fed379853cDe0fa4F97AB987181B1E5Ea",
-    decimals: 6,
-  },
-  USDT: {
-    symbol: "USDT",
-    name: "Tether (Testnet)",
-    address: "0x88b8E2161DEDC77EF4ab7585569D2415a1C1055D",
+    address: "0x534b2f3A21130d7a60830c2Df862319e593943A3",
     decimals: 6,
   },
   WETH: {
     symbol: "WETH",
     name: "Wrapped Ether (Testnet)",
-    address: "0xB5a30b0FDc5EA94A52fDc42e3E9760Cb8449Fb37",
+    address: "0x45477f4709771331db81944A5E20eF95Bc7BA2D7",
     decimals: 18,
-  },
-  WSOL: {
-    symbol: "WSOL",
-    name: "Wrapped SOL (Testnet)",
-    address: "0x5387C85A4965769f6B0Df430638a1388493486F1",
-    decimals: 9,
   },
 };
 

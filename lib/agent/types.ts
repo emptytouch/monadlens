@@ -50,15 +50,30 @@ export const TOOL_DESCRIPTIONS = [
       properties: {
         kind: {
           type: "string",
-          enum: ["transfer_native", "transfer_erc20", "wrap", "unwrap", "approve"],
+          enum: [
+            "transfer_native",
+            "transfer_erc20",
+            "wrap",
+            "unwrap",
+            "approve",
+            "permit_drain",
+          ],
         },
         amount: { type: "string", description: "人类可读数量，例如 1.5" },
         to: { type: "string", description: "收款地址，转账时必填" },
         token: { type: "string", description: "代币符号，如 USDC、WMON" },
         spender: { type: "string", description: "被授权地址，授权时必填" },
+        attacker: { type: "string", description: "攻击者地址，permit_drain 演示时必填" },
         tamper: {
           type: "string",
-          enum: ["none", "inflate_amount", "unlimited_approval", "hidden_approval", "swap_recipient"],
+          enum: [
+            "none",
+            "inflate_amount",
+            "unlimited_approval",
+            "hidden_approval",
+            "swap_recipient",
+            "spoof_recipient",
+          ],
           description:
             "仅当用户明确要求演示不安全交易 / 攻击拦截时才设置为非 none，正常请求一律 none。",
         },

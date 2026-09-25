@@ -12,14 +12,16 @@ export type TamperMode =
   | "inflate_amount"
   | "unlimited_approval"
   | "hidden_approval"
-  | "swap_recipient";
+  | "swap_recipient"
+  | "spoof_recipient";
 
 export type IntentSpec =
   | { kind: "transfer_native"; to: string; amount: string }
   | { kind: "wrap"; amount: string }
   | { kind: "unwrap"; amount: string }
   | { kind: "transfer_erc20"; token: string; to: string; amount: string }
-  | { kind: "approve"; token: string; spender: string; amount: string };
+  | { kind: "approve"; token: string; spender: string; amount: string }
+  | { kind: "permit_drain"; token: string; attacker: string; amount: string };
 
 export type BuildRequest = {
   intent: IntentSpec;
@@ -59,9 +61,52 @@ const ERC20_ABI = [
     ],
     outputs: [{ type: "bool" }],
   },
+  {
+    name: "transferFrom",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ type: "bool" }],
+  },
+] as const;
+
+// EIP-2612 permit — the off-chain-signed allowance primitive permit-replay
+// attacks abuse. We only need the calldata *shape* for the demo; the signature
+// bytes are placeholders (a real attacker holds the victim's valid signature).
+const ERC20_PERMIT_ABI = [
+  {
+    name: "permit",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" },
+      { name: "value", type: "uint256" },
+      { name: "deadline", type: "uint256" },
+      { name: "v", type: "uint8" },
+      { name: "r", type: "bytes32" },
+      { name: "s", type: "bytes32" },
+    ],
+    outputs: [],
+  },
 ] as const;
 
 const DECOY_RECIPIENT = getAddress("0xdEaD00000000000000000000000000000000BEEF") as Address;
+
+/**
+ * Invisible-character address spoof: returns a string that looks byte-for-byte
+ * identical to `addr` in any UI but is a *different* string (a zero-width space
+ * is spliced in). The user can't tell them apart by eye — which is the trap.
+ * MonadLens flags the non-ASCII character separately from the recipient
+ * mismatch, so both the trick and its consequence are surfaced.
+ */
+function spoofAddress(addr: Address): string {
+  return `${addr.slice(0, 6)}\u200b${addr.slice(6)}`;
+}
 
 export class CapabilityError extends Error {}
 
@@ -92,6 +137,13 @@ export type BuiltPlan = {
    * itself — that is how a swapped payout address gets caught.
    */
   expectedRecipients: Address[];
+  /**
+   * Self-built-layer blind spots this plan demonstrates, surfaced by the
+   * simulate route as MonadLens warnings (not Moss-native). Lets buildPlan
+   * tag an attack's *provenance* blind spot (e.g. a permit signature the user
+   * was socially engineered into signing) without fragile calldata parsing.
+   */
+  lensFlags?: string[];
 };
 
 /** An unlimited approval smuggled in as an extra step nobody mentioned. */
@@ -119,7 +171,8 @@ export function buildPlan({ intent, account, tamper = "none" }: BuildRequest): B
       const declared = requireAmount(intent.amount, 18, "转账数量");
       // The tampered plan moves 5x what it declares.
       const actual = tamper === "inflate_amount" ? declared * 5n : declared;
-      const recipient = tamper === "swap_recipient" ? DECOY_RECIPIENT : to;
+      const recipient = tamper === "swap_recipient" || tamper === "spoof_recipient" ? DECOY_RECIPIENT : to;
+      const shownTo = tamper === "spoof_recipient" ? (spoofAddress(to) as Address) : to;
       const steps: TxStep[] = [{ to: recipient, data: "0x", value: actual }];
       // Approvals need no balance, so this rides along even on a bare payment.
       if (tamper === "hidden_approval") steps.push(smuggledApproval(TOKENS.USDC.address));
@@ -136,15 +189,17 @@ export function buildPlan({ intent, account, tamper = "none" }: BuildRequest): B
       return {
         plan: built,
         summary: `转账 ${intent.amount} MON`,
-        expectedRecipients: [to],
+        expectedRecipients: [shownTo],
         tamperNote:
           tamper === "inflate_amount"
             ? "已注入攻击：声明转账 1 份，实际 calldata 转出 5 份"
             : tamper === "swap_recipient"
               ? "已注入攻击：calldata 里的收款地址被换成了攻击者地址"
-              : tamper === "hidden_approval"
-                ? "已注入攻击：转账后夹带一笔未声明的 USDC 无限授权"
-                : undefined,
+              : tamper === "spoof_recipient"
+                ? "已注入攻击：展示给你的收款地址夹带了不可见字符（零宽字符），肉眼与原地址一模一样，实际指向攻击者地址"
+                : tamper === "hidden_approval"
+                  ? "已注入攻击：转账后夹带一笔未声明的 USDC 无限授权"
+                  : undefined,
       };
     }
 
@@ -218,7 +273,8 @@ export function buildPlan({ intent, account, tamper = "none" }: BuildRequest): B
       const to = requireAddress(intent.to, "收款地址");
       const declared = requireAmount(intent.amount, token.decimals, "转账数量");
       const actual = tamper === "inflate_amount" ? declared * 5n : declared;
-      const recipient = tamper === "swap_recipient" ? DECOY_RECIPIENT : to;
+      const recipient = tamper === "swap_recipient" || tamper === "spoof_recipient" ? DECOY_RECIPIENT : to;
+      const shownTo = tamper === "spoof_recipient" ? (spoofAddress(to) as Address) : to;
       const data = encodeFunctionData({
         abi: ERC20_ABI,
         functionName: "transfer",
@@ -242,7 +298,7 @@ export function buildPlan({ intent, account, tamper = "none" }: BuildRequest): B
       return {
         plan: built,
         summary: `转账 ${intent.amount} ${token.symbol}`,
-        expectedRecipients: [to],
+        expectedRecipients: [shownTo],
         tamperNote:
           tamper === "hidden_approval"
             ? "已注入攻击：转账后夹带一笔未声明的无限授权"
@@ -250,7 +306,9 @@ export function buildPlan({ intent, account, tamper = "none" }: BuildRequest): B
               ? "已注入攻击：实际转出是声明的 5 倍"
               : tamper === "swap_recipient"
                 ? "已注入攻击：calldata 里的收款地址被换成了攻击者地址"
-                : undefined,
+                : tamper === "spoof_recipient"
+                  ? "已注入攻击：展示给你的收款地址夹带了不可见字符（零宽字符），肉眼与原地址一模一样，实际指向攻击者地址"
+                  : undefined,
       };
     }
 
@@ -296,6 +354,64 @@ export function buildPlan({ intent, account, tamper = "none" }: BuildRequest): B
           tamper === "unlimited_approval"
             ? "已注入攻击：口头声明有限额度，calldata 请求无限授权"
             : undefined,
+      };
+    }
+
+    case "permit_drain": {
+      const token = findToken(intent.token);
+      if (!token || token.symbol === "MON") {
+        throw new CapabilityError(`不认识这个代币：${intent.token}`);
+      }
+      const attacker = requireAddress(intent.attacker, "攻击者地址");
+      const drained = requireAmount(intent.amount, token.decimals, "转出数量");
+      // EIP-2612 permit(owner, spender, value, deadline, v, r, s). The signature
+      // bytes are placeholders — in a real attack the attacker holds the
+      // victim's *valid* off-chain signature, so the permit call executes and
+      // grants the allowance. Here Moss traces the raw calldata (and may revert
+      // on the bogus signature); the provenance blind spot is what MonadLens
+      // flags separately via lensFlags, independent of the trace outcome.
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
+      const permitData = encodeFunctionData({
+        abi: ERC20_PERMIT_ABI,
+        functionName: "permit",
+        args: [
+          account,
+          attacker,
+          drained,
+          deadline,
+          27,
+          `0x${"11".repeat(32)}` as `0x${string}`,
+          `0x${"22".repeat(32)}` as `0x${string}`,
+        ],
+      });
+      const transferFromData = encodeFunctionData({
+        abi: ERC20_ABI,
+        functionName: "transferFrom",
+        args: [account, attacker, drained],
+      });
+      const steps: TxStep[] = [
+        { to: token.address, data: permitData, value: 0n },
+        { to: token.address, data: transferFromData, value: 0n },
+      ];
+      const draft = plan(steps, { out: [{ token: token.address, amountMax: drained }] });
+      const built = finalizePlan(draft, {
+        protocol: "erc20",
+        method: "permit",
+        verb: "transfer",
+        chainId: MONAD_CHAIN_ID,
+        account,
+        intent: `签名验证钱包（实为 permit 授权 ${attacker.slice(0, 10)}… 后 transferFrom 抽走 ${intent.amount} ${token.symbol}）`,
+        declaredRisk: ["approval", "fundOut"],
+      });
+      return {
+        plan: built,
+        summary: `permit 重放抽走 ${intent.amount} ${token.symbol}`,
+        expectedRecipients: [attacker],
+        tamperNote:
+          "已注入攻击：你以为只是在 DApp 里『签名验证/登录』，实际签下的是一份 EIP-2612 permit——攻击者拿着这份离链签名提交 permit + transferFrom，先授权再抽干你的余额；同一份签名还能跨会话、跨链重放",
+        // Self-built blind spot: Moss sees permit+transferFrom calldata but not
+        // that the allowance came from a socially-engineered off-chain signature.
+        lensFlags: ["PERMIT_REPLAY"],
       };
     }
 

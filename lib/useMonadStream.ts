@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { createPublicClient, webSocket, http, fallback, type Block } from "viem";
 import { monad, MONAD_RPC_WS_LIST, MONAD_RPC_HTTP_LIST } from "./chain";
 import { useChainStore, type BlockInfo, type TxInfo } from "./store";
@@ -15,10 +15,13 @@ const POLL_IDLE_MS = 8_000;
 const POLL_ACTIVE_MS = 1_500;
 
 function toBlockInfo(block: FullBlock): BlockInfo {
+  // Some RPC endpoints return transactions as hashes rather than objects even
+  // with includeTransactions:true. Guard so a malformed block can never crash.
+  const txs = Array.isArray(block.transactions) ? block.transactions : [];
   return {
     number: block.number ?? 0n,
     timestamp: Number(block.timestamp),
-    txCount: block.transactions.length,
+    txCount: txs.length,
     gasUsed: block.gasUsed,
     gasLimit: block.gasLimit,
     baseFeePerGas: block.baseFeePerGas ?? null,
@@ -28,7 +31,8 @@ function toBlockInfo(block: FullBlock): BlockInfo {
 
 function toTxInfos(block: FullBlock): TxInfo[] {
   const now = Date.now();
-  return block.transactions.slice(0, 8).map((tx) => ({
+  const txs = Array.isArray(block.transactions) ? block.transactions : [];
+  return txs.slice(0, 8).map((tx) => ({
     hash: tx.hash,
     from: tx.from,
     to: tx.to,
@@ -50,7 +54,13 @@ function toTxInfos(block: FullBlock): TxInfo[] {
  * Polling is self-scheduling (never setInterval): a fixed interval shorter than
  * the request latency stacks requests on top of each other and melts the RPC.
  */
-export function useMonadStream() {
+export function useMonadStream(watchHashes?: string[]) {
+  // When the user just broadcast a tx, the 8 s idle poll is too coarse to show
+  // it landing. Read through a ref so a changing list never tears down the
+  // socket subscription.
+  const hurryRef = useRef(false);
+  hurryRef.current = (watchHashes?.length ?? 0) > 0;
+
   useEffect(() => {
     const { pushBlock, pushTxs, setStatus, setSource } = useChainStore.getState();
     let disposed = false;
@@ -61,9 +71,11 @@ export function useMonadStream() {
 
     let lastBlockAt = 0;
     /** Ignore blocks we've already rendered, whichever transport wins. */
-    const accept = (block: FullBlock, from: "ws" | "http") => {
-      if (disposed) return;
-      const n = block.number ?? 0n;
+    const accept = (block: FullBlock | undefined, from: "ws" | "http") => {
+      // A malformed/empty block can arrive from a flaky public RPC subscription
+      // (viem's watchBlocks onBlock). Never throw on it — polling is the backup.
+      if (disposed || !block || block.number == null) return;
+      const n = block.number;
       if (n <= highest) return;
       highest = n;
       if (from === "ws") lastWsAt = Date.now();
@@ -102,7 +114,13 @@ export function useMonadStream() {
         const u = wsClient.watchBlocks({
           includeTransactions: true,
           emitOnBegin: true,
-          onBlock: (block) => accept(block as FullBlock, "ws"),
+          onBlock: (block) => {
+            try {
+              accept(block as FullBlock, "ws");
+            } catch {
+              // Non-fatal: a single bad frame shouldn't crash the stream.
+            }
+          },
           // A socket error is not fatal — polling is already running underneath.
           onError: (err) => {
             if (!disposed && useChainStore.getState().blocks.length === 0) {
@@ -141,7 +159,9 @@ export function useMonadStream() {
       }
       if (disposed) return;
       // Schedule only after the previous request settled: no pile-up.
-      const next = Date.now() - lastWsAt < WS_FRESH_MS ? POLL_IDLE_MS : POLL_ACTIVE_MS;
+      // Hurry while we're waiting on the user's own tx to appear in a block.
+      const next =
+        hurryRef.current || Date.now() - lastWsAt >= WS_FRESH_MS ? POLL_ACTIVE_MS : POLL_IDLE_MS;
       pollTimer = setTimeout(poll, next);
     };
     void poll();

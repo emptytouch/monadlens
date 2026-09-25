@@ -1,12 +1,23 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAccount, useBalance, useSendTransaction, useSwitchChain } from "wagmi";
 import type { SimResponse, SimSuccess } from "@/lib/simulation";
-import { WARNING_COPY } from "@/lib/simulation";
+import {
+  WARNING_COPY,
+  WARNING_COPY_EN,
+  LENS_WARNING_CODES,
+  riskScore,
+  RISK_LEVEL_LABELS,
+  groupWarningsByDimension,
+  type Lang,
+  type RiskLevel,
+  type SimWarning,
+} from "@/lib/simulation";
 import { MONAD_CHAIN_ID, MONAD_IS_TESTNET, explorerTx, tokenFromRef } from "@/lib/chain";
 import { formatAmount, formatApproval, shortAddr } from "@/lib/format";
 import { SectionBoundary } from "./SectionBoundary";
+import { useChainStore } from "@/lib/store";
 
 /* ── tiny presentational helpers ─────────────────────────────── */
 
@@ -61,6 +72,28 @@ function VerdictBanner({ verdict, reverted }: { verdict: string; reverted: boole
   );
 }
 
+function RiskScore({ score, level, lang }: { score: number; level: RiskLevel; lang: Lang }) {
+  const cls =
+    level === "critical"
+      ? "border-red-400/50 bg-red-400/10 text-red-300"
+      : level === "high"
+        ? "border-rose-400/40 bg-rose-400/5 text-rose-300"
+        : level === "medium"
+          ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
+          : "border-emerald-400/40 bg-emerald-400/10 text-emerald-300";
+  return (
+    <div className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${cls}`}>
+      <div className="text-2xl font-bold tabular leading-none">{score}</div>
+      <div className="leading-tight">
+        <div className="text-[10px] opacity-80">
+          {lang === "en" ? "Risk score / 100" : "风险分 / 100"}
+        </div>
+        <div className="text-xs font-medium">{RISK_LEVEL_LABELS[level][lang]}</div>
+      </div>
+    </div>
+  );
+}
+
 /* ── inner component: only renders when sim data is present ─── */
 
 function SimulationContent({
@@ -76,6 +109,8 @@ function SimulationContent({
   sent,
   sendError,
   gasState,
+  netFeeGwei,
+  netGasPct,
 }: {
   sim: SimSuccess;
   address: string | undefined;
@@ -88,7 +123,10 @@ function SimulationContent({
   switching: boolean;
   sent: string[];
   sendError: string | null;
-  gasState: "ok" | "low" | "unknown";
+        gasState: "ok" | "low" | "unknown";
+  /** Live network conditions, so the lens can price this signature. */
+  netFeeGwei: number | null;
+  netGasPct: number | null;
 }) {
   const blocked = sim.verdict === "blocked";
   const effects = sim.simulation?.effects ?? {
@@ -96,9 +134,141 @@ function SimulationContent({
     nftApprovals: [], nftsOut: [], nftsIn: [], recipients: [],
   };
   const warnings = sim.simulation?.warnings ?? [];
+  // ── Direction 4: counterparty identity (client-side enrichment) ──
+  // Collect every address that receives value or gets approval, then look each
+  // one up via /api/chain so we can flag contract counterparties — a "WHO is
+  // the other side" blind spot Moss never surfaces.
+  const counterparties = useMemo(
+    () =>
+      Array.from(
+        // Dedupe case-insensitively: the same address can arrive with different
+        // checksumming (0xFb8b…C541 vs 0xfb8b…c541) and would render twice.
+        new Set<string>(
+          [
+            ...(sim.expectedRecipients ?? []),
+            ...(effects.recipients ?? []),
+            ...(effects.approvals ?? []).map((a: { spender: string }) => a.spender),
+          ]
+            .filter((a) => /^0x[0-9a-fA-F]{40}$/.test(a))
+            .map((a) => a.toLowerCase()),
+        ),
+      ),
+    [sim.expectedRecipients, effects.recipients, effects.approvals],
+  );
+  const [identityMap, setIdentityMap] = useState<Record<string, { isContract: boolean; balance: string; nonce: number }>>({});
+  const mapRef = useRef(identityMap);
+  mapRef.current = identityMap;
+  useEffect(() => {
+    const missing = counterparties.filter((a) => mapRef.current[a] === undefined);
+    if (missing.length === 0) return;
+    let cancelled = false;
+    Promise.all(
+      missing.map((addr) =>
+        fetch("/api/chain", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "address_summary", address: addr }),
+        })
+          .then((r) => r.json())
+          .then((d) => ({
+            addr,
+            // A failed lookup (e.g. getCode unsupported) must stay "unknown" —
+            // defaulting to { isContract: false } would silently label a real
+            // contract as an EOA and hide the counterparty warning.
+            info: d?.ok
+              ? { isContract: Boolean(d.isContract), balance: String(d.balance ?? "0"), nonce: Number(d.nonce ?? 0) }
+              : null,
+          }))
+          .catch(() => ({ addr, info: null })),
+      ),
+    ).then((results) => {
+      if (cancelled) return;
+      setIdentityMap((prev) => {
+        const next = { ...prev };
+        results.forEach((r) => {
+          if (r.info) next[r.addr] = r.info;
+        });
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [counterparties.join(",")]);
+  const identityWarnings = useMemo<SimWarning[]>(() => {
+    const contractAddrs = counterparties.filter((a) => identityMap[a]?.isContract);
+    if (contractAddrs.length === 0) return [];
+    return [
+      {
+        code: "CONTRACT_COUNTERPARTY",
+        message: `合约对手方（可运行任意代码）：${contractAddrs.map((a) => shortAddr(a, 4)).join("、")}`,
+      },
+    ];
+  }, [counterparties, identityMap]);
+  // Merge Moss warnings with the self-built identity warnings so the risk
+  // score, engine split, gap map and structured reading all include it.
+  const allWarnings = useMemo<SimWarning[]>(() => [...warnings, ...identityWarnings], [warnings, identityWarnings]);
+
+  // Split by engine: Moss's native warning system vs MonadLens's own
+  // recipient-reconciliation layer. This split IS the "not a Moss wrapper"
+  // story — quantify it right in the UI.
+  const lensWarnings = allWarnings.filter((w) => LENS_WARNING_CODES.has(w.code));
+  const mossWarnings = allWarnings.filter((w) => !LENS_WARNING_CODES.has(w.code));
   const expectedSet = new Set((sim.expectedRecipients ?? []).map((a) => a.toLowerCase()));
   const accountMismatch =
     address && sim.plan?.account && sim.plan.account.toLowerCase() !== address.toLowerCase();
+
+  // ── Direction 3: structured consequence reading ──
+  const [lang, setLang] = useState<Lang>("zh");
+  const risk = useMemo(() => riskScore(sim.verdict, allWarnings), [sim.verdict, allWarnings]);
+
+  // ── Live network → consequences (dashboard feeds the lens) ──────────
+  // "This tx moves 1 MON" only means something next to "and it costs this much
+  // right now, on a network this busy". Priced from the live base fee and the
+  // gas Moss measured for this exact plan.
+  const totalGas = useMemo(
+    () =>
+      (sim.simulation?.gasPerTx ?? []).reduce<bigint>(
+        (acc, g) => (g ? acc + BigInt(g) : acc),
+        0n,
+      ),
+    [sim.simulation?.gasPerTx],
+  );
+  const estFeeMon =
+    netFeeGwei != null && totalGas > 0n ? (Number(totalGas) * netFeeGwei) / 1e9 : null;
+  const congested = netGasPct != null && netGasPct >= 60;
+  const groups = useMemo(() => groupWarningsByDimension(allWarnings), [allWarnings]);
+  const copyOf = (code: string): { title: string; hint: string } =>
+    (lang === "en" ? WARNING_COPY_EN : WARNING_COPY)[code] ?? { title: code, hint: "" };
+  const ui = lang === "en"
+    ? {
+        tamperPrefix: "Demo attack injected: ",
+        netTitle: "Live network",
+        baseFee: "Base fee",
+        estGas: "Est. gas for this tx",
+        congested: (pct: number) =>
+          `Network is busy (${pct}% of block gas used) — read the consequences twice before signing.`,
+        mossCovered: "Moss native: outflow amount · approval cap · NFT operator · event consistency",
+        mossNoCheck: "Moss doesn't verify",
+        gapFilled: "MonadLens fills ✓",
+        gapIntro: "Moss natively cannot produce the alerts below — blind spots MonadLens fills",
+        warnings: "Security warnings",
+        reading: "Consequence reading",
+      }
+    : {
+        tamperPrefix: "演示攻击注入：",
+        netTitle: "当前网络",
+        baseFee: "基础费",
+        estGas: "这笔预估 Gas",
+        congested: (pct: number) =>
+          `网络当前较拥堵（区块 Gas 占用 ${pct}%），签名前更该看清后果。`,
+        mossCovered: "Moss 原生告警：转出金额 · 授权额度 · NFT 操作权 · 事件一致性",
+        mossNoCheck: "Moss 不校验",
+        gapFilled: "MonadLens 补上 ✓",
+        gapIntro: "以下告警 Moss 原生给不了——是 MonadLens 补上的盲区",
+        warnings: "安全告警",
+        reading: "后果解读",
+      };
 
   // ── balance before/after ───────────────────────────────────
   const tokenRefs = useMemo(() => {
@@ -173,16 +343,61 @@ function SimulationContent({
   /* ── render ──────────────────────────────────────────────── */
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto p-4">
-      <div>
-        <h2 className="text-sm font-medium text-mist-200">后果透镜</h2>
-        <p className="text-[11px] text-mist-400">{sim.summary}</p>
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-medium text-mist-200">
+            {lang === "en" ? "Consequence Lens" : "后果透镜"}
+          </h2>
+          <p className="text-[11px] text-mist-400">{sim.summary}</p>
+        </div>
+        <button
+          onClick={() => setLang(lang === "en" ? "zh" : "en")}
+          className="shrink-0 rounded-full border border-ink-700 bg-ink-850 px-2.5 py-1 text-[10px] text-mist-300 transition-colors hover:border-violet-deep hover:text-violet-soft"
+        >
+          {lang === "en" ? "中文" : "EN"}
+        </button>
       </div>
 
       <VerdictBanner verdict={sim.verdict} reverted={sim.simulation?.reverted ?? false} />
 
+      <RiskScore score={risk.score} level={risk.level} lang={lang} />
+
+      {counterparties.length > 0 && (
+        <div className="rounded-lg border border-ink-700 bg-ink-900 px-3 py-2">
+          <div className="mb-1 text-[11px] text-mist-400">
+            {lang === "en" ? "Counterparty identity" : "对手方身份"}
+          </div>
+          <div className="space-y-1">
+            {counterparties.map((a) => {
+              const info = identityMap[a];
+              const isContract = info?.isContract;
+              return (
+                <div key={a} className="flex items-center gap-2 text-[11px]">
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-[10px] ${
+                      isContract ? "bg-violet-brand/20 text-violet-soft" : "bg-ink-700 text-mist-300"
+                    }`}
+                  >
+                    {isContract
+                      ? lang === "en"
+                        ? "Contract"
+                        : "合约"
+                      : lang === "en"
+                        ? "EOA"
+                        : "外部账户"}
+                  </span>
+                  <span className="font-mono text-mist-300">{shortAddr(a, 6)}</span>
+                  {info === undefined && <span className="text-mist-500">…</span>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {sim.tamperNote && (
         <div className="rounded-lg border border-rose-400/40 bg-rose-400/5 px-3 py-2 text-[11px] leading-relaxed text-rose-300">
-          <span className="font-medium">演示攻击注入：</span>
+          <span className="font-medium">{ui.tamperPrefix}</span>
           {sim.tamperNote}
         </div>
       )}
@@ -192,7 +407,7 @@ function SimulationContent({
         <section className="space-y-2">
           <h3 className="text-[11px] text-mist-400">资金与授权（模拟结果）</h3>
 
-          <div className="rounded-lg border border-ink-700 bg-ink-850 px-3 py-2">
+          <div className="rounded-xl border border-ink-700 bg-ink-900 shadow-panel px-3 py-2">
             <div className="mb-1 text-[11px] text-rose-300/80">流出</div>
             {(effects.assetsOut?.length ?? 0) === 0 && (
               <div className="text-[11px] text-mist-400">无</div>
@@ -204,7 +419,7 @@ function SimulationContent({
             ))}
           </div>
 
-          <div className="rounded-lg border border-ink-700 bg-ink-850 px-3 py-2">
+          <div className="rounded-xl border border-ink-700 bg-ink-900 shadow-panel px-3 py-2">
             <div className="mb-1 text-[11px] text-emerald-300/80">流入</div>
             {(effects.assetsIn?.length ?? 0) === 0 && (
               <div className="text-[11px] text-mist-400">无</div>
@@ -234,8 +449,11 @@ function SimulationContent({
           )}
 
           {(effects.recipients?.length ?? 0) > 0 && (
-            <div className="rounded-lg border border-ink-700 bg-ink-850 px-3 py-2">
-              <div className="mb-1 text-[11px] text-mist-400">收款方</div>
+            <div className="rounded-xl border border-ink-700 bg-ink-900 shadow-panel px-3 py-2">
+              <div className="mb-1 flex items-center justify-between text-[11px] text-mist-400">
+                <span>收款方</span>
+                <span className="text-[10px] text-violet-soft/80">MonadLens 对账（Moss 不校验收款方）</span>
+              </div>
               {(effects.recipients ?? []).map((r: string, i: number) => {
                 const declared = expectedSet.has(r.toLowerCase());
                 return (
@@ -247,7 +465,7 @@ function SimulationContent({
                     </span>
                     {!declared && (
                       <span className="shrink-0 rounded bg-rose-400/15 px-1.5 py-0.5 text-[10px] text-rose-300">
-                        未声明
+                        未声明 · 自研层检出
                       </span>
                     )}
                   </div>
@@ -263,7 +481,7 @@ function SimulationContent({
         {tokenRefs.length > 0 && (
           <section className="space-y-1.5">
             <h3 className="text-[11px] text-mist-400">余额影响（签名前后）</h3>
-            <div className="rounded-lg border border-ink-700 bg-ink-850 px-3 py-2">
+            <div className="rounded-xl border border-ink-700 bg-ink-900 shadow-panel px-3 py-2">
               <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-2 text-[10px] text-mist-400">
                 <span>资产</span>
                 <span className="text-right">当前</span>
@@ -288,25 +506,81 @@ function SimulationContent({
               })}
             </div>
             <p className="text-[10px] leading-relaxed text-mist-400">
-              这是 Moss 模拟出的真实余额变化\u2014\u2014签约前先看清楚你的钱包会少什么、多什么。
+              这是 Moss 模拟出的真实余额变化——签约前先看清楚你的钱包会少什么、多什么。
             </p>
           </section>
         )}
       </SectionBoundary>
 
       {/* ── Section: warnings ───────────────────────────────── */}
-      <SectionBoundary label="安全告警">
-        {(warnings?.length ?? 0) > 0 && (
+      <SectionBoundary label={ui.warnings}>
+        {(allWarnings?.length ?? 0) > 0 && (
           <section className="space-y-1.5">
-            <h3 className="text-[11px] text-mist-400">安全告警（{warnings.length}）</h3>
-            {(warnings ?? []).map((w: { code: string; message: string }, i: number) => {
-              const copy = WARNING_COPY[w.code] ?? { title: w.code, hint: w.message };
+            <h3 className="text-[11px] text-mist-400">
+              {ui.warnings}（{allWarnings.length}）
+              <span className="ml-1.5 font-normal">
+                {lang === "en"
+                  ? `Moss ×${mossWarnings.length} · MonadLens layer ×${lensWarnings.length}`
+                  : `Moss 模拟 ×${mossWarnings.length} · MonadLens 对账层 ×${lensWarnings.length}`}
+              </span>
+            </h3>
+
+            {/* Engine gap map — the core "not a Moss wrapper" proof: Moss
+                constrains HOW MUCH leaves the wallet, MonadLens reconciles
+                WHO receives it. Rendered only when the self-built layer
+                actually caught something this round. */}
+            {lensWarnings.length > 0 && (
+              <div className="rounded-lg border border-violet-deep/40 bg-violet-brand/5 px-3 py-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="rounded bg-violet-brand/20 px-1.5 py-0.5 text-[10px] font-medium text-violet-soft">
+                    自研层
+                  </span>
+                  <span className="text-[11px] font-medium text-violet-soft">{ui.gapIntro}</span>
+                </div>
+                <div className="mt-1.5 space-y-0.5 text-[10px] leading-relaxed text-mist-300">
+                  <div className="flex items-center justify-between gap-2">
+                    <span>{ui.mossCovered}</span>
+                    <span className="shrink-0 text-emerald-300">已覆盖</span>
+                  </div>
+                  {lensWarnings.map((w: { code: string }, i: number) => (
+                    <div className="flex items-center justify-between gap-2" key={`gap-${i}`}>
+                      <span>{copyOf(w.code).title}</span>
+                      <span className="shrink-0">
+                        <span className="mr-1 text-mist-400 line-through">{ui.mossNoCheck}</span>
+                        <span className="text-violet-soft">{ui.gapFilled}</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {mossWarnings.map((w: { code: string; message: string }, i: number) => {
+              const copy = copyOf(w.code);
               return (
                 <div
-                  key={`warn-${i}`}
+                  key={`moss-warn-${i}`}
                   className="rounded-lg border border-rose-400/30 bg-rose-400/5 px-3 py-2"
                 >
                   <div className="text-xs font-medium text-rose-300">{copy.title}</div>
+                  <div className="mt-0.5 text-[11px] leading-relaxed text-mist-300">{copy.hint}</div>
+                  <div className="mt-1 font-mono text-[10px] text-mist-400">{w.message}</div>
+                </div>
+              );
+            })}
+            {lensWarnings.map((w: { code: string; message: string }, i: number) => {
+              const copy = copyOf(w.code);
+              return (
+                <div
+                  key={`lens-warn-${i}`}
+                  className="rounded-lg border border-violet-deep/50 bg-violet-brand/10 px-3 py-2"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span className="rounded bg-violet-brand/25 px-1.5 py-0.5 text-[10px] font-medium text-violet-soft">
+                      自研层
+                    </span>
+                    <span className="text-xs font-medium text-rose-300">{copy.title}</span>
+                  </div>
                   <div className="mt-0.5 text-[11px] leading-relaxed text-mist-300">{copy.hint}</div>
                   <div className="mt-1 font-mono text-[10px] text-mist-400">{w.message}</div>
                 </div>
@@ -316,11 +590,37 @@ function SimulationContent({
         )}
       </SectionBoundary>
 
+      {/* ── Section: structured consequence reading (Direction 3) ── */}
+      {groups.length > 0 && (
+        <SectionBoundary label={ui.reading}>
+          <section className="space-y-2">
+            <h3 className="text-[11px] text-mist-400">{ui.reading}</h3>
+            {groups.map((g) => (
+              <div key={g.key} className="rounded-lg border border-ink-700 bg-ink-900 px-3 py-2">
+                <div className="text-[11px] font-medium text-violet-soft">{g.label[lang]}</div>
+                <ul className="mt-1 space-y-1">
+                  {g.items.map((w: { code: string; message: string }, i: number) => {
+                    const copy = copyOf(w.code);
+                    return (
+                      <li key={`${g.key}-${i}`} className="text-[11px] leading-relaxed text-mist-300">
+                        <span className="text-rose-300">{copy.title}</span>
+                        <span className="ml-1">{copy.hint}</span>
+                        <span className="mt-0.5 block font-mono text-[10px] text-mist-400">{w.message}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
+          </section>
+        </SectionBoundary>
+      )}
+
       {/* ── Footer: protocol info + send button (always safe) ── */}
       <section className="mt-auto space-y-2 border-t border-ink-700 pt-3">
         <div className="flex items-center justify-between text-[10px] text-mist-400">
           <span>
-            协议 {sim.plan?.protocol ?? "\u2014"} \u00b7 {sim.plan?.method ?? "\u2014"}
+            协议 {sim.plan?.protocol ?? "—"} · {sim.plan?.method ?? "—"}
           </span>
           <span className="font-mono">{shortAddr(sim.plan?.planHash ?? "", 6) || "\u2014"}</span>
         </div>
@@ -333,6 +633,29 @@ function SimulationContent({
 
         {!blocked && (
           <>
+            <div className="rounded-lg border border-ink-700 bg-ink-850 px-3 py-2">
+              <div className="mb-1 text-[10px] text-mist-400">
+                {ui.netTitle}
+                <span className="ml-1 text-mist-500">· 来自左侧实时看板</span>
+              </div>
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="text-mist-400">{ui.baseFee}</span>
+                <span className="tabular text-mist-200">
+                  {netFeeGwei != null ? `${netFeeGwei.toFixed(2)} gwei` : "—"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="text-mist-400">{ui.estGas}</span>
+                <span className="tabular text-mist-200">
+                  {estFeeMon != null ? `≈ ${estFeeMon.toFixed(5)} MON` : "—"}
+                </span>
+              </div>
+              {congested && (
+                <div className="mt-1 text-[10px] leading-relaxed text-amber-300">
+                  {ui.congested(netGasPct!)}
+                </div>
+              )}
+            </div>
             {gasState === "low" && (
               <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-[11px] leading-relaxed text-amber-300">
                 <span className="font-medium">主网 Gas 不足：</span>
@@ -391,13 +714,13 @@ function SimulationContent({
                   className="flex items-center justify-between rounded-lg border border-emerald-400/30 bg-emerald-400/5 px-3 py-1.5 text-[11px] text-emerald-300 hover:border-emerald-400/60"
                 >
                   <span className="font-mono">{shortAddr(h, 6)}</span>
-                  <span>在 {MONAD_IS_TESTNET ? "MonadExplorer" : "MonadScan"} 查看 \u2197</span>
+                  <span>在 {MONAD_IS_TESTNET ? "MonadExplorer" : "MonadScan"} 查看 ↗</span>
                 </a>
               ))}
             </div>
             <button
               onClick={onReset}
-              className="w-full rounded-lg border border-ink-700 bg-ink-850 px-4 py-1.5 text-[11px] text-mist-400 transition-colors hover:border-violet-deep hover:text-violet-soft"
+              className="w-full rounded-xl border border-ink-700 bg-ink-900 shadow-panel px-4 py-1.5 text-[11px] text-mist-400 transition-colors hover:border-violet-deep hover:text-violet-soft"
             >
               重新演示
             </button>
@@ -410,8 +733,19 @@ function SimulationContent({
 
 /* ── outer shell: never crashes ────────────────────────────── */
 
-export function ConsequencePanel({ sim }: { sim: SimResponse | null }) {
+export function ConsequencePanel({
+  sim,
+  onSent,
+}: {
+  sim: SimResponse | null;
+  /** Report broadcast hashes upward so the live feed can highlight them. */
+  onSent?: (hashes: string[]) => void;
+}) {
   const { address, isConnected, chainId } = useAccount();
+  // Live network conditions come from the same store the dashboard renders,
+  // so the lens prices a signature against the chain state the user just saw.
+  const netFeeGwei = useChainStore((s) => s.series[s.series.length - 1]?.baseFeeGwei ?? null);
+  const netGasPct = useChainStore((s) => s.series[s.series.length - 1]?.gasPct ?? null);
   const { data: nativeBalance, isLoading: balanceLoading } = useBalance({ address, query: { enabled: Boolean(address) } });
   const { sendTransactionAsync } = useSendTransaction();
   const { switchChainAsync, isPending: switching } = useSwitchChain();
@@ -424,13 +758,22 @@ export function ConsequencePanel({ sim }: { sim: SimResponse | null }) {
     setMounted(true);
   }, []);
 
+  // A new simulation means a new demo: clear the previous broadcast result.
+  // `sent` lives in this outer shell, so without this the sign button stayed
+  // stuck on "已广播" (and disabled) after switching to another attack demo.
+  const simKey = sim && sim.ok ? (sim.plan?.planHash ?? null) : null;
+  useEffect(() => {
+    setSent([]);
+    setSendError(null);
+  }, [simKey]);
+
   // Empty / error states — these are simple static JSX, cannot crash.
   if (!sim) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
         <div className="text-sm text-mist-300">后果透镜</div>
         <p className="text-xs leading-relaxed text-mist-400">
-          在中间的对话里让 Agent 帮你做一笔链上操作，AI 会在签名之前先用 Moss 模拟器把这笔交易的真实后果摊开在这里\u2014\u2014转走什么、收到什么、授权了什么、有没有告警。
+          在中间的对话里让 Agent 帮你做一笔链上操作，AI 会在签名之前先用 Moss 模拟器把这笔交易的真实后果摊开在这里——转走什么、收到什么、授权了什么、有没有告警。
         </p>
         <p className="mt-2 text-[11px] text-mist-400">看清楚，再签字。</p>
       </div>
@@ -451,7 +794,7 @@ export function ConsequencePanel({ sim }: { sim: SimResponse | null }) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
         <div className="text-sm text-mist-300">后果透镜</div>
-        <p className="text-xs text-mist-400">加载中\u2026</p>
+        <p className="text-xs text-mist-400">加载中…</p>
       </div>
     );
   }
@@ -533,6 +876,7 @@ export function ConsequencePanel({ sim }: { sim: SimResponse | null }) {
         });
         hashes.push(h);
         setSent([...hashes]); // 每笔成功即展示，避免部分失败丢失已广播哈希
+        onSent?.([h]); // 让左侧实时交易流高亮这一笔
       }
     } catch (e) {
       if (hashes.length > 0) setSent([...hashes]); // 部分成功也保留已广播交易
@@ -558,6 +902,8 @@ export function ConsequencePanel({ sim }: { sim: SimResponse | null }) {
       sent={sent}
       sendError={sendError}
       gasState={gasState}
+      netFeeGwei={netFeeGwei}
+      netGasPct={netGasPct}
     />
   );
 }

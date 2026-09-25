@@ -30,8 +30,32 @@ const SUGGESTIONS: Suggestion[] = [
     },
   },
   {
+    label: "🔓 零宽字符掉包",
+    action: {
+      type: "build_plan",
+      intent: { kind: "transfer_native", to: "0x0000000000000000000000000000000000000001", amount: "0.1" },
+      tamper: "spoof_recipient",
+    },
+  },
+  {
     label: "🔓 夹带授权",
     action: { type: "build_plan", intent: { kind: "wrap", amount: "1" }, tamper: "hidden_approval" },
+  },
+  {
+    label: "🔓 无限授权",
+    action: {
+      type: "build_plan",
+      intent: { kind: "approve", token: "USDC", spender: "0x0000000000000000000000000000000000000001", amount: "100" },
+      tamper: "unlimited_approval",
+    },
+  },
+  {
+    label: "🔓 permit 重放",
+    action: {
+      type: "build_plan",
+      intent: { kind: "permit_drain", token: "USDC", attacker: "0x0000000000000000000000000000000000000001", amount: "100" },
+      tamper: "none",
+    },
   },
   {
     label: "🔓 金额膨胀",
@@ -58,7 +82,15 @@ function EngineBadge({ engine, degraded }: { engine?: string; degraded?: string 
   );
 }
 
-export function AgentChat({ onSimulate }: { onSimulate: (sim: SimResponse) => void }) {
+export function AgentChat({
+  onSimulate,
+  pendingQuery,
+}: {
+  onSimulate: (sim: SimResponse) => void;
+  /** A question pushed in from another panel (e.g. "who is this address?").
+   *  `seq` makes repeat clicks on the same target fire again. */
+  pendingQuery?: { text: string; seq: number } | null;
+}) {
   const { address } = useAccount();
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -105,6 +137,10 @@ export function AgentChat({ onSimulate }: { onSimulate: (sim: SimResponse) => vo
               `基础费 ${formatNumber(res.baseFeeGwei ?? 0, 1)} gwei，Gas 占用 ${res.gasUsedPct}%。`,
             engine: reply.engine,
           });
+        } else {
+          // Without this the chat would go silent: the agent says "here's the
+          // live state" and then nothing arrives when the RPC is down.
+          append({ role: "agent", text: `查询失败：${res?.error ?? "未知错误"}`, engine: reply.engine });
         }
       } else if (a.type === "explain_tx") {
         const res = await fetch("/api/chain", {
@@ -154,7 +190,24 @@ export function AgentChat({ onSimulate }: { onSimulate: (sim: SimResponse) => vo
         if (!sim.ok) {
           append({ role: "agent", text: `构造交易失败：${sim.error}`, engine: reply.engine });
         } else {
-          const tail = sim.verdict === "blocked" ? "——已在右侧被 Moss 拦截。" : "——后果已摊在右侧，看清楚再决定要不要签名。";
+          // When the self-built layer is what caught the attack, say so
+          // explicitly — this is the "not a Moss wrapper" differentiator,
+          // spoken out loud during the demo. Two blind spots exist:
+          //   · UNDECLARED_RECIPIENT — Moss checks amount, not who gets paid
+          //   · MISLEADING_ADDRESS   — Moss never inspects address *appearance*
+          const warnings = (sim.simulation?.warnings ?? []) as { code: string }[];
+          const caughtSpoof = warnings.some((w) => w.code === "MISLEADING_ADDRESS");
+          const caughtPermit = warnings.some((w) => w.code === "PERMIT_REPLAY_RISK");
+          const caughtRecipient = warnings.some((w) => w.code === "UNDECLARED_RECIPIENT");
+          const tail = caughtSpoof
+            ? "——由 MonadLens 自研地址安全检测层拦截：Moss 从不检查地址外观，零宽字符伪装这种肉眼无法分辨的掉包是我们补上的盲区。"
+            : caughtPermit
+              ? "——由 MonadLens 自研签名溯源层拦截：Moss 只看到 permit + transferFrom 的 calldata，看不到这份授权来自你被社工诱导签下的离链 permit 签名、且可重放，这条盲区是我们补上的。"
+              : caughtRecipient
+                ? "——由 MonadLens 自研收款方对账层拦截：Moss 只核对转出多少，不核对转给谁，这一条是我们补上的盲区。"
+                : sim.verdict === "blocked"
+                  ? "——已在右侧被 Moss 拦截。"
+                  : "——后果已摊在右侧，看清楚再决定要不要签名。";
           append({
             role: "agent",
             text: `已构造「${sim.summary}」的未签名交易并跑完模拟${tail}`,
@@ -170,6 +223,19 @@ export function AgentChat({ onSimulate }: { onSimulate: (sim: SimResponse) => vo
       });
     }
   }
+
+  /**
+   * Answer a question raised in another panel — the dashboard hands over an
+   * address ("who is this?") and we run it through the same agent path as if
+   * the user had typed it, so the answer is real chain data, not a stub.
+   */
+  const handledSeq = useRef(0);
+  useEffect(() => {
+    if (!pendingQuery || pendingQuery.seq === handledSeq.current) return;
+    handledSeq.current = pendingQuery.seq;
+    void send(pendingQuery.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingQuery]);
 
   async function send(text: string) {
     const message = text.trim();
@@ -248,7 +314,7 @@ export function AgentChat({ onSimulate }: { onSimulate: (sim: SimResponse) => vo
               className={`max-w-[88%] rounded-2xl px-3 py-2 text-xs leading-relaxed ${
                 m.role === "user"
                   ? "bg-violet-brand/20 text-mist-100"
-                  : "border border-ink-700 bg-ink-850 text-mist-200"
+                  : "border border-ink-700 bg-ink-900 text-mist-200 shadow-panel"
               }`}
             >
               <span className="whitespace-pre-line">{m.text}</span>
