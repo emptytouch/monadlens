@@ -22,6 +22,14 @@ if [ "$changed" = "ALL_CHANGES" ]; then
   exit 1
 fi
 
+# 空 diff：说明本次提交与上次构建提交相同（同提交重部署 / Netlify 已把当前
+# commit 记为上次构建点）。这种情况必须继续构建——否则代码改动会被静默跳过、
+# 站点永远不更新。配置/基础设施变更或首次真实构建也都该走这条路。
+if [ -z "$changed" ]; then
+  echo "无文件差异（同提交重部署或首次构建）→ 正常构建"
+  exit 1
+fi
+
 # 遍历变更文件，出现任何非文档类变更则构建
 while IFS= read -r f; do
   [ -z "$f" ] && continue
