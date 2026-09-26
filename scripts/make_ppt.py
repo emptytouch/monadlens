@@ -137,7 +137,7 @@ def page_cover():
            "color": MUTED, "align": PP_ALIGN.CENTER}])
     card(s, Inches(3.4), Inches(5.55), Inches(6.5), Inches(0.7), fill=BG_CARD)
     text(s, Inches(3.4), Inches(5.62), Inches(6.5), Inches(0.6),
-         [{"text": "LXDAO × Monad 黑客松  ·  2026", "size": 15,
+         [{"text": "Monad Metropolis 黑客松 · Track 04 · 2026", "size": 15,
            "color": TEXT, "align": PP_ALIGN.CENTER}], anchor=MSO_ANCHOR.MIDDLE)
 
 
@@ -146,7 +146,7 @@ def page_pain():
     s = slide_new(); bg(s)
     header(s, "问题背景", "链上交易的「盲签」之痛")
     panel(s, Inches(0.6), Inches(1.95), Inches(7.3), Inches(4.6),
-          "常见的 5 种风险",
+          "链上交易的真实风险",
           bullets([
               "授权无感知：点一下「授权」，可能交出无限额度",
               "收款方被掉包：看似转给朋友，实际转给黑客地址",
@@ -207,7 +207,7 @@ def page_arch():
     header(s, "整体架构", "三栏一体化：数据 · 对话 · 防护")
     cols = [
         ("左栏", "实时看板", "Monad 链上实时数据\nTPS / 出块 / Gas / 活跃榜", CYAN),
-        ("中栏", "Agent 双脑", "自然语言交互\n规则引擎 + DeepSeek LLM", PURPLE),
+        ("中栏", "Agent 双脑", "自然语言交互\n规则引擎 + LLM（OpenAI 兼容）", PURPLE),
         ("右栏", "后果透镜", "签名前 Moss 模拟\n预览资金流向与授权", AMBER),
     ]
     w = Inches(3.85); gap = Inches(0.27); left = Inches(0.6); top = Inches(2.0)
@@ -286,9 +286,9 @@ def page_feat_agent():
               "交易规划、攻击演示一键触发",
           ], size=15, gap=9), accent=CYAN, title_size=19)
     panel(s, Inches(6.8), Inches(1.95), Inches(5.9), Inches(2.55),
-          "✨ DeepSeek LLM", bullets([
+          "✨ LLM（OpenAI 兼容）", bullets([
               "自然、智能，理解自由提问",
-              "解释「为什么先模拟再签名」等",
+              "当前接入智谱 glm-4-flash，可一键换模型",
           ], size=15, gap=9), accent=PURPLE, title_size=19)
     card(s, Inches(0.6), Inches(4.75), Inches(12.1), Inches(1.75), fill=BG_CARD,
          line=PURPLE, radius=0.1)
@@ -326,38 +326,75 @@ def page_feat_lens():
 # ================= 第 8 页：功能④ 攻击护栏 =================
 def page_feat_guard():
     s = slide_new(); bg(s)
-    header(s, "核心功能 ④", "5 类攻击护栏 — 签名前拦截")
-    items = [
-        ("🔄", "收款方掉包"), ("🔓", "夹带授权"), ("💥", "金额膨胀"),
-        ("♾️", "无限授权"), ("✍️", "篡改后签名"),
+    header(s, "核心功能 ④", "7 类攻击护栏 — 签名前拦截")
+    demos = [
+        ("💥", "金额膨胀", "Moss"),
+        ("♾️", "无限授权", "Moss"),
+        ("🔓", "夹带授权", "Moss"),
+        ("✍️", "篡改后签名", "Moss"),
+        ("🔄", "收款方掉包", "自研"),
+        ("👻", "零宽字符掉包", "自研"),
+        ("🪞", "permit 重放", "自研"),
     ]
-    w = Inches(2.28); gap = Inches(0.17); left = Inches(0.6); top = Inches(2.0)
-    for i, (icon, name) in enumerate(items):
+    w = Inches(1.62); gap = Inches(0.12); left = Inches(0.6); top = Inches(2.0)
+    for i, (icon, name, who) in enumerate(demos):
         l = left + i * (w + gap)
-        card(s, l, top, w, Inches(1.85), fill=BG_CARD)
-        text(s, l, top + Inches(0.2), w, Inches(0.8),
-             [{"text": icon, "size": 30, "color": AMBER, "align": PP_ALIGN.CENTER}],
+        card(s, l, top, w, Inches(2.05), fill=BG_CARD)
+        text(s, l, top + Inches(0.18), w, Inches(0.7),
+             [{"text": icon, "size": 27, "color": AMBER, "align": PP_ALIGN.CENTER}],
              anchor=MSO_ANCHOR.MIDDLE)
-        text(s, l, top + Inches(0.95), w, Inches(0.5),
-             [{"text": name, "size": 15, "color": WHITE, "bold": True,
+        text(s, l, top + Inches(0.98), w, Inches(0.5),
+             [{"text": name, "size": 13, "color": WHITE, "bold": True,
                "align": PP_ALIGN.CENTER}])
-        text(s, l, top + Inches(1.4), w, Inches(0.4),
-             [{"text": "全部 blocked", "size": 12, "color": CYAN,
+        tag_color = PURPLE if who == "自研" else CYAN
+        text(s, l, top + Inches(1.55), w, Inches(0.4),
+             [{"text": who, "size": 12, "color": tag_color,
                "align": PP_ALIGN.CENTER, "bold": True}])
-    card(s, Inches(0.6), Inches(4.25), Inches(12.1), Inches(2.25), fill=BG_CARD,
+    card(s, Inches(0.6), Inches(4.35), Inches(12.1), Inches(2.25), fill=BG_CARD,
          line=DANGER, radius=0.1)
-    accent_bar(s, Inches(0.6), Inches(4.25), Inches(2.25), DANGER)
-    text(s, Inches(0.9), Inches(4.4), Inches(11.5), Inches(0.5),
-         [{"text": "危险操作对比", "size": 18, "color": WHITE, "bold": True}])
-    text(s, Inches(0.9), Inches(5.0), Inches(5.5), Inches(1.3),
-         [{"text": "普通钱包", "size": 15, "color": MUTED, "bold": True},
-          {"text": "直接放行 → 资产悄悄流失", "size": 15, "color": TEXT,
-           "space_before": 6}])
-    text(s, Inches(6.8), Inches(5.0), Inches(5.5), Inches(1.3),
-         [{"text": "MonadLens", "size": 15, "color": CYAN, "bold": True},
-          {"text": "标红告警 + 锁死签名按钮", "size": 15, "color": TEXT,
-           "space_before": 6}])
+    accent_bar(s, Inches(0.6), Inches(4.35), Inches(2.25), DANGER)
+    text(s, Inches(0.9), Inches(4.5), Inches(11.5), Inches(0.5),
+         [{"text": "Moss 原生抓不到的 3 类盲区 —— MonadLens 在应用层补上",
+           "size": 18, "color": WHITE, "bold": True}])
+    text(s, Inches(0.9), Inches(5.1), Inches(11.6), Inches(1.25),
+         bullets([
+             "收款方对账：金额一分不差，收款地址却被换 —— Moss 不查「转给谁」",
+             "地址外观：零宽 / 形似字符掉包，肉眼与 checksum 都认不出",
+             "签名溯源：permit 重放 —— Moss 只见 calldata，不见离链签名的 provenance",
+         ], size=14, gap=7, color=TEXT), anchor=MSO_ANCHOR.TOP)
+    text(s, Inches(0.9), Inches(6.3), Inches(11.5), Inches(0.3),
+         [{"text": "另：兑换请求会被当场拆穿为「假 DEX 骗签名」骗局（permit 重放演示）",
+           "size": 12, "color": MUTED}])
     footer(s, 8)
+
+
+# ================= 第 8.5 页：自研三层 =================
+def page_self_built():
+    s = slide_new(); bg(s)
+    header(s, "核心差异", "不是 Moss 套壳 —— 在 Moss 之上补了三层")
+    layers = [
+        ("① 收款方对账", "UNDECLARED_RECIPIENT",
+         "Moss 只约束「转出多少」，不约束「转给谁」。MonadLens 用界面声明的收款方做对账，未声明地址直接标红。", CYAN),
+        ("② 地址外观检测", "MISLEADING_ADDRESS",
+         "零宽 / 形似字符掉包，calldata 全合法、肉眼无法分辨。MonadLens 单独检测非 ASCII 与形近字符。", PURPLE),
+        ("③ 签名溯源", "PERMIT_REPLAY_RISK",
+         "EIP-2612 permit 攻击的危险在离链签名；Moss 只见 permit + transferFrom calldata，MonadLens 标出其 provenance 盲区。", AMBER),
+    ]
+    w = Inches(3.85); gap = Inches(0.27); left = Inches(0.6); top = Inches(2.0)
+    for i, (title, code, desc, acc) in enumerate(layers):
+        l = left + i * (w + gap)
+        card(s, l, top, w, Inches(4.2), fill=BG_CARD)
+        accent_bar(s, l, top, Inches(4.2), acc)
+        text(s, l + Inches(0.26), top + Inches(0.2), w - Inches(0.5), Inches(0.55),
+             [{"text": title, "size": 19, "color": WHITE, "bold": True}])
+        text(s, l + Inches(0.26), top + Inches(0.82), w - Inches(0.5), Inches(0.4),
+             [{"text": code, "size": 14, "color": acc, "bold": True}])
+        text(s, l + Inches(0.26), top + Inches(1.4), w - Inches(0.52), Inches(2.7),
+             [{"text": desc, "size": 14, "color": TEXT, "line_spacing": 1.25}])
+    text(s, Inches(0.6), Inches(6.45), Inches(12.1), Inches(0.4),
+         [{"text": "这三类是 Moss 原生看不到、只有应用层才知道的信息 —— 评委视角的核心创新点。",
+           "size": 13, "color": MUTED, "align": PP_ALIGN.CENTER}])
+    footer(s, 9)
 
 
 # ================= 第 9 页：闭环 =================
@@ -389,7 +426,7 @@ def page_loop():
          [{"text": "交易哈希已在 MonadScan 验证通过 —— 模拟、签名、广播、验证全链路跑通，"
                    "不是 Demo 截图，是真上链。",
            "size": 15, "color": MUTED, "line_spacing": 1.3}])
-    footer(s, 9)
+    footer(s, 10)
 
 
 # ================= 第 10 页：技术栈 =================
@@ -399,14 +436,14 @@ def page_stack():
     groups = [
         ("前端 / 框架", ["Next.js 16", "React 19", "Tailwind v4", "TypeScript"], PURPLE),
         ("链上 / 钱包", ["wagmi v3", "viem v2", "zustand", "Moss SDK"], CYAN),
-        ("AI / 可视化", ["DeepSeek LLM", "规则引擎", "recharts", "debug_traceCall"], AMBER),
+        ("AI / 可视化", ["LLM（OpenAI 兼容）", "规则引擎", "recharts", "debug_traceCall"], AMBER),
     ]
     w = Inches(3.85); gap = Inches(0.27); left = Inches(0.6); top = Inches(2.0)
     for i, (title, items, acc) in enumerate(groups):
         l = left + i * (w + gap)
         panel(s, l, top, w, Inches(3.6), title, bullets(items, size=17, gap=12),
               accent=acc, title_size=19, body_size=17)
-    footer(s, 10)
+    footer(s, 11)
 
 
 # ================= 第 11 页：演示脚本 =================
@@ -438,7 +475,7 @@ def page_demo():
          [{"text": "提示：测试网代币免费、无真实价值，可放心演示每一步。",
            "size": 13, "color": CYAN, "align": PP_ALIGN.CENTER}],
          anchor=MSO_ANCHOR.MIDDLE)
-    footer(s, 11)
+    footer(s, 13)
 
 
 # ================= 第 12 页：结尾 =================
@@ -452,15 +489,15 @@ def page_end():
          [{"text": "MonadLens — 让你的每一笔签名都心里有数",
            "size": 20, "color": PURPLE, "align": PP_ALIGN.CENTER}])
     text(s, Inches(0.9), Inches(5.4), Inches(11.5), Inches(0.5),
-         [{"text": "致谢  LXDAO × Monad  黑客松", "size": 15, "color": MUTED,
+         [{"text": "致谢  Monad Metropolis  黑客松", "size": 15, "color": MUTED,
            "align": PP_ALIGN.CENTER}])
 
 
 # ---------------- 组装 ----------------
 page_cover(); page_pain(); page_position(); page_arch()
 page_feat_dashboard(); page_feat_agent(); page_feat_lens()
-page_feat_guard(); page_loop(); page_stack(); page_demo(); page_end()
+page_feat_guard(); page_self_built(); page_loop(); page_stack(); page_demo(); page_end()
 
-OUT = r"C:\Users\EmptyTouch\WorkBuddy\2026-08-07-21-45-54\monadlens\MonadLens演示.pptx"
+OUT = r"D:\Web3\monadlens\MonadLens演示 · 透视链.pptx"
 prs.save(OUT)
 print("SAVED", OUT, "slides=", len(prs.slides._sldIdLst))
