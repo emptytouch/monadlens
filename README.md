@@ -88,7 +88,7 @@ Moss 已经很强，但它的告警来自对 calldata 和信封（`expects`）�
 
 | 演示 | 注入方式 | 被什么抓住 | 谁抓的 |
 |---|---|---|---|
-| 金额放大 | 声明转 1 份，calldata 转 5 份 | `OUTFLOW_EXCEEDS_MAX` | Moss |
+| 金额膨胀 | 声明转 1 份，calldata 转 5 份 | `OUTFLOW_EXCEEDS_MAX` | Moss |
 | 无限授权 | 口头说批 100，calldata 请求 `uint256.max` | `APPROVAL_EXCEEDS_MAX` | Moss |
 | 夹带授权 | 正常转账后偷偷追加一笔无限授权 | `UNDECLARED_APPROVAL` | Moss |
 | 收款方掉包 | 金额不动，收款地址换成攻击者 | `UNDECLARED_RECIPIENT` | **MonadLens 自研** |
@@ -204,7 +204,7 @@ MonadLens 是标准 Next.js 应用，模拟接口依赖 `debug_traceCall`，**�
 
 ## 技术栈
 
-Next.js 16（App Router / Turbopack）· React 19 · TypeScript · Tailwind v4 · wagmi v3 + viem v2 · zustand · recharts · **@themoss/core + @themoss/simulator**
+Next.js 16（App Router）· React 19 · TypeScript · Tailwind v4 · wagmi v3 + viem v2 · zustand · recharts · **@themoss/core + @themoss/simulator**
 
 Monad 主网 chainId `143`，浏览器 [MonadScan](https://monadscan.com)。
 
